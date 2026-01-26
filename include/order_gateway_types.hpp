@@ -1,0 +1,13 @@
+//
+// Created by charl on 1/13/2026.
+//
+
+#ifndef TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP
+#define TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP
+
+#include <cstdint>
+
+
+
+
+#endif //TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP
