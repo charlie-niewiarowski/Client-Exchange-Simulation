@@ -5,9 +5,7 @@
 #ifndef TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP
 #define TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP
 
-#include <cstdint>
-
-
+using Port = uint16_t;
 
 
 #endif //TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP

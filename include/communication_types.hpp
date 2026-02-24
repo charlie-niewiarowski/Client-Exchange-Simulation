@@ -11,9 +11,10 @@
 #include "order_types.hpp"
 #include "../lib/RingBuffer.hpp"
 
-enum class MessageType : uint8_t { NEW = 0, CANCEL = 1, MODIFY = 2};
+enum class MessageType : uint8_t { NEW = 0, CANCEL = 1, MODIFY = 2, MATCH = 4};
 using OrderId = uint32_t;
-using ClientId = uint32_t;
+using ClientId = uint32_t; // The client never needs to know this, but it is useful for the gateway to identify
+                           // which session it needs to contact when an outbound message is popped
 
 struct InboundMessage { // gateway -> engine
     ClientId client_id;       // 8 bytes
@@ -36,20 +37,7 @@ struct OutboundMessage { // engine -> gateway
     uint8_t padding[2];       // 2 bytes
 }; // 16 bytes
 
-struct SharedMemoryHeader {
-    uint32_t num_inbound_entries;
-    uint32_t max_outbound_entries;
-    uint32_t outbound_entries;
-    uint16_t max_num_clients;
-    uint16_t num_clients;
-};
-
 using ClientMessageMap = std::unordered_map<ClientId, std::vector<OutboundMessage>>;
-
-class SharedMemory {
-    SharedMemoryHeader header_;
-    char data[0];
-};
 
 enum class SetupError { WSA_FAIL, SOCKET_FAIL, BIND_FAIL, LISTEN_FAIL, ALLOC_FAIL, MAP_FAIL };
 

@@ -2,21 +2,21 @@
 // Created by charl on 11/25/2025.
 //
 
-#include "../include/Engine.hpp"
-#include "../config/macros.h"
-
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <mutex>
-#include <stdexcept>
 #include <thread>
-#include <experimental/scope>
+
+#include "../include/Engine.hpp"
+#include "../config/macros.h"
+#include "../utils/shared_memory.hpp"
 
 //=============================================================================
 // Special Member Functions + Their Helpers
 //=============================================================================
-Engine::Order::Order(OrderId id, OrderRequest order_request) {
+Engine::Order::Order(const OrderId id, const OrderRequest order_request) {
+    client_id_ = order_request.get_clientId();
     id_ = id;
     side_ = order_request.get_side();
     order_type_ = order_request.get_type();
@@ -28,84 +28,15 @@ Engine::Order::Order(OrderId id, OrderRequest order_request) {
 Engine::Engine() {
     orders_.reserve(PREALLOCATION_COUNT);
 
-    auto memory_err = setup_shared_memory();
-    if (!memory_err) {
-        std::cout << "Engine: Could not setup shared memory";
-    }
+    void* rx_ptr{create_shm(INBOUND_SHM_NAME, RINGBUFFER_COUNT)};
+    rx_ring = static_cast<RingBuffer<InboundMessage>*>(rx_ptr);
+    void* tx_ptr{create_shm(OUTBOUND_SHM_NAME, RINGBUFFER_COUNT)};
+    tx_ring = static_cast<RingBuffer<OutboundMessage>*>(tx_ptr);
 }
 
 Engine::~Engine() {
-    unmap_memory();
-}
-
-//===== 1. Memory Helpers =====
-std::expected<void, SetupError> Engine::setup_shared_memory() {
-
-    if (auto err = allocate(); !err) {
-        std::cout << "Gateway: file setup or mapping failed" << '\n';
-        return err;
-    }
-
-    std::experimental::scope_exit guard([&]() {
-        unmap_memory();
-    });
-
-    if (auto err = initialize_buffers(); !err) {
-        std::cout << "Gateway: initialize_buffers failed" << '\n';
-        return err;
-    }
-
-    return {};
-}
-
-std::expected<void, SetupError> Engine::allocate() {
-    constexpr size_t INBOUND_BYTES = sizeof(RingBuffer<InboundMessage>);
-    constexpr size_t OUTBOUND_BYTES = sizeof(RingBuffer<OutboundMessage>);
-    constexpr size_t MEM_SIZE = INBOUND_BYTES + OUTBOUND_BYTES;
-
-    hMapFile_ = CreateFileMapping(
-        INVALID_HANDLE_VALUE,
-        nullptr,
-        PAGE_READWRITE,
-        0,
-        MEM_SIZE,
-        MAPPING_NAME);
-
-    if (!hMapFile_) {
-        return SetupError::ALLOC_FAIL;
-    }
-
-    base_ = MapViewOfFile(
-        hMapFile_,
-        FILE_MAP_ALL_ACCESS,
-        0,
-        0,
-        MEM_SIZE);
-
-    if (!base_) {
-        CloseHandle(hMapFile_);
-        return SetupError::MAP_FAIL;
-    }
-
-    return {};
-}
-
-std::expected<void, SetupError> Engine::initialize_buffers() {
-    constexpr size_t INBOUND_BYTES = sizeof(RingBuffer<InboundMessage>);
-    inbound_buff_ = static_cast<RingBuffer<InboundMessage>*>(base_);
-
-    auto* outbound_base = static_cast<std::byte*>(base_) + INBOUND_BYTES;
-    outbound_client_msgs_ = reinterpret_cast<ClientMessageMap*>(outbound_base);
-}
-
-//===== 2. Destruction Helpers =====
-void Engine::unmap_memory() {
-    if (base_) {
-        UnmapViewOfFile(base_);
-    }
-    if (hMapFile_) {
-        CloseHandle(hMapFile_);
-    }
+    destroy_shm(INBOUND_SHM_NAME);
+    destroy_shm(OUTBOUND_SHM_NAME);
 }
 
 
@@ -113,8 +44,8 @@ void Engine::unmap_memory() {
 // run() Function + the Suite of Helpers
 //=============================================================================
 void Engine::run() {
-    std::jthread engine_thread([&]() {
-       engine_loop();
+    std::jthread matching_thread([&]() {
+       match_orders();
     });
 
     std::jthread io_thread([&]() {
@@ -122,13 +53,17 @@ void Engine::run() {
     });
 }
 
-//===== 1. Main Engine Execution Loop =====
-void Engine::engine_loop() {
-    for (;;) {
-        InboundMessage msg{};
-        inbound_buff_->pop(msg);
+void Engine::rx_push_trigger() {
+    if (!rx_dispatch_pending.exchange(true, std::memory_order_acq_rel)) {
+        rx_dispatch_pending.store(false, std::memory_order_release);
+        drain_rx_ring();
+    }
+}
+
+void Engine::drain_rx_ring() {
+    InboundMessage msg = {0};
+    while (rx_ring->pop(std::ref(msg))) {
         execute_request(msg);
-        match_orders();
     }
 }
 
@@ -137,7 +72,7 @@ void Engine::execute_request(InboundMessage msg) {
     OutboundMessage outbound_msg{msg.client_id, msg.order_id, msg.message_type, Status::SUCCESS};
     switch (msg.message_type) {
         case MessageType::NEW:
-            add_order(OrderRequest{msg.side, msg.order_type, msg.price, msg.quantity});
+            add_order(OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
             break;
         case MessageType::CANCEL:
             if (!orders_.contains(msg.order_id)) {
@@ -151,10 +86,14 @@ void Engine::execute_request(InboundMessage msg) {
                 outbound_msg.status = Status::FAILURE;
                 break;
             }
-            modify_order(msg.order_id, OrderRequest{msg.side, msg.order_type, msg.price, msg.quantity});
+            modify_order(msg.order_id, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
+            break;
+        default:
+            std::cerr << "Engine: Inbound message attempted MATCH request";
     }
 
-    (*outbound_client_msgs_)[msg.client_id].push_back(outbound_msg);
+    tx_ring->push(outbound_msg);
+    tx_notify_();
 }
 
 //===== 1.1.1. Add Order To the Orderbook =====
@@ -258,9 +197,16 @@ void Engine::match_orders() {
             {
                 std::unique_lock<std::shared_mutex> lock(trades_mux_);
                 trades_buffer_.push(Trade{
-                    TradeInfo(bid.id_, bid.price_, fill_quantity),
-                    TradeInfo(ask.id_, ask.price_, fill_quantity)}
+                    TradeInfo(bid.client_id_, bid.id_, bid.price_, fill_quantity),
+                    TradeInfo(ask.client_id_, ask.id_, ask.price_, fill_quantity)}
                 );
+
+                OutboundMessage buy_msg(bid.client_id_, bid.id_, MessageType::MATCH, Status::SUCCESS);
+                OutboundMessage ask_msg(ask.client_id_, ask.id_, MessageType::MATCH, Status::SUCCESS);
+
+                tx_ring->push(buy_msg);
+                tx_ring->push(ask_msg);
+                tx_notify_();
             }
 
         }

@@ -1,34 +1,32 @@
-cmake_minimum_required(VERSION 3.31)
-project(untitled)
+cmake_minimum_required(VERSION 3.25)
+project(SingleInstrumentExchange LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
+
+# GoogleTest
 FetchContent_Declare(
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
-        GIT_TAG origin/main
+        GIT_TAG v1.17.0
 )
-
 FetchContent_MakeAvailable(googletest)
 
 add_executable(test
         tests/engine_test.cpp
         src/Engine.cpp
         src/OrderGateway.cpp
-        include/Trade.hpp
-        lib/RingBuffer.cpp
-        lib/RingBuffer.hpp
-        include/engine_types.hpp
         src/OrderBook.cpp
-        include/OrderBook.hpp
+        utils/shared_memory.cpp
 )
 
-target_include_directories(test PRIVATE include)
+find_package(Boost REQUIRED)
+target_include_directories(test PRIVATE ${Boost_INCLUDE_DIRS})
 
 target_link_libraries(test
-        gtest
-        gtest_main
+        GTest::gtest_main
 )
 
 include(GoogleTest)
