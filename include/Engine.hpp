@@ -9,8 +9,6 @@
 #include <map>
 #include <atomic>
 #include <unordered_map>
-#include <windows.h>
-#include <expected>
 #include <shared_mutex>
 #include <stdexcept>
 
@@ -53,15 +51,14 @@ class Engine {
     OrderMap orders_;
     std::atomic<OrderId> next_id_{0};
 
-    HANDLE hMapFile_{nullptr};
-    void* base_{nullptr};
+    RingBuffer<InboundMessage>* rx_ring{nullptr};
+    RingBuffer<OutboundMessage>* tx_ring{nullptr};
 
-    RingBuffer<InboundMessage>* inbound_buff_{nullptr};
-    ClientMessageMap* outbound_client_msgs_{nullptr};
-        std::shared_mutex client_mux_;
+    std::atomic_bool rx_dispatch_pending{false};
+    std::function<void()> tx_notify_;
 
+    std::shared_mutex trades_mux_;
     RingBuffer<Trade> trades_buffer_{RINGBUFFER_COUNT};
-        std::shared_mutex trades_mux_;
 public:
     Engine();
     Engine(const Engine& other) = delete;
@@ -71,27 +68,20 @@ public:
     ~Engine();
 
     void run();
+    void set_tx_notify(const std::function<void()>& func) { tx_notify_ = func; }
+    void rx_push_trigger();
 private:
-    // setup and cleanup helpers
-    std::expected<void, SetupError> setup_shared_memory();
-        std::expected<void, SetupError> allocate();
-        std::expected<void, SetupError> initialize_buffers();
-    void unmap_memory();
-
     // helpers for run() function
-    void engine_loop(); // main thread for message execution / relaying and order matching
+    void drain_rx_ring();
         void execute_request(InboundMessage msg);
             void add_order(OrderRequest order_request);
             void cancel_order(OrderId id);
             void modify_order(OrderId id, OrderRequest request);
-        void publish_outbound(InboundMessage msg);
         void match_orders();
             bool can_match(Side side, Price price) const;
 
     void expose_trades(); // I/O bound thread that outputs trades to the console
         void write_to_console(const Trade &trade);
-
-
 };
 
 

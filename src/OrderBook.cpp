@@ -2,29 +2,33 @@
 // Created by charl on 1/17/2026.
 //
 
-
-#include <iostream>
 #include <thread>
-
 #include "../include/OrderBook.hpp"
 
-void OrderBook::run() {
-    std::jthread engine([this] {
-       pin_thread(0);
-        engine_.run();
-    });
+OrderBook::OrderBook(Port port) :
+    io_{}, gateway_{io_, port}, engine_{} {
 
-    std::jthread gateway([this] {
-       pin_thread(1);
-        gateway_.run();
+    // wire notifications
+    engine_.set_tx_notify([&]{
+        gateway_.tx_push_trigger(); // engine will call this whenever it wants to notify
+    });                            // gateway that it has enqueued an outbound message
+
+    gateway_.set_rx_notify([&]{
+        engine_.rx_push_trigger(); // same idea as above but flipped
     });
 }
 
-void OrderBook::pin_thread(Core core) {
-    DWORD_PTR mask = static_cast<DWORD_PTR>(1) << core;
-    HANDLE hThread = GetCurrentThread();
+void OrderBook::run() {
+    gateway_.start_accept();
 
-    if (DWORD_PTR result = SetThreadAffinityMask(hThread, mask); result == 0) {
-        std::cout << GetLastError() << "\n";
-    }
+    std::thread io_thread([this]{
+        io_.run();
+    });
+
+    std::thread engine_thread([this]{
+        engine_.run();
+    });
+
+    engine_thread.join();
+    io_thread.join();
 }

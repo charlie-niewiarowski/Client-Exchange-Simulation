@@ -2,274 +2,120 @@
 // Created by charl on 1/13/2026.
 //
 
-#include "OrderGateway.hpp"
+#include "../include/OrderGateway.hpp"
 #include "../lib/RingBuffer.hpp"
 #include "../config/macros.h"
+#include "../utils/shared_memory.hpp"
 
 #include <cstring>
 #include <iostream>
-#include <stdexcept>
-#include <experimental/scope>
+#include <span>
+
+using boost::asio::ip::tcp;
 
 //=============================================================================
-// Special Member Functions + Their Helpers
+// TCP Session Subclass
 //=============================================================================
-OrderGateway::OrderGateway() {
-    auto socket_err =  setup_socket();
-    if (!socket_err) {
-        std::cout << "Gateway: Could not setup socket";
-    }
+void OrderGateway::Session::read(const ClientId& client_id) {
+    auto self = shared_from_this();
 
-    auto memory_err = setup_shared_memory();
-    if (!memory_err) {
-        std::cout << "Gateway: Could not setup shared memory";
-    }
-}
+    socket_.async_read_some(
+        boost::asio::buffer(buffer_),
+        [this, self, client_id](boost::system::error_code ec, std::size_t bytes) {
+            if (!ec) {
+                auto msg = std::bit_cast<InboundMessage>(buffer_);
+                msg.client_id = client_id;
 
-OrderGateway::~OrderGateway() {
-    unmap_memory();
-}
+                if (!gateway_.validate_message(msg)) {
+                    gateway_.communicate_failure(msg);
+                    return;
+                }
 
-//===== 1. Socket Helpers =====
-std::expected<void, SetupError> OrderGateway::setup_socket() {
-    if (auto err = initialize_winsock(); !err) {
-        std::cout << "Gateway: WSAStartup failed" << '\n';
-        return err;
-    }
-    if (auto err = create_socket(); !err) {
-        std::cout << "Gateway: socket creation failed" << '\n';
-        return err;
-    }
-
-    std::experimental::scope_exit guard([&]() {
-        if (socket_ != INVALID_SOCKET) closesocket(socket_);
-    }); // will run always even if we return an error upon socket creation
-
-    if (auto err = bind_socket(); !err) {
-        std::cout << "Gateway: bind socket failed" << '\n';
-        return err;
-    }
-    if (auto err = listen_for_requests(); !err) {
-        std::cout << "Gateway: listen failed" << '\n';
-        return err;
-    }
-
-    return {};
-}
-
-std::expected<void, SetupError> OrderGateway::initialize_winsock() {
-    WSAData wsa_data;
-    int wsa_err;
-    WORD w_version_requested = MAKEWORD(2, 2);
-    wsa_err = WSAStartup(w_version_requested, &wsa_data);
-
-    if (wsa_err != 0) {
-        return SetupError::WSA_FAIL;
-    }
-    return {};
-}
-
-std::expected<void, SetupError> OrderGateway::create_socket() {
-    socket_ = socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP);
-
-    if (socket_ == INVALID_SOCKET) {
-        WSACleanup();
-        return SetupError::SOCKET_FAIL;
-    }
-    return {};
-}
-
-std::expected<void, SetupError> OrderGateway::bind_socket() {
-    sockaddr_in address;
-    address.sin_family = AF_UNSPEC;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons((u_short)5555);
-
-    if (bind(socket_, reinterpret_cast<SOCKADDR*>(&address), sizeof(address)) == SOCKET_ERROR) {
-        closesocket(socket_);
-        WSACleanup();
-        return SetupError::BIND_FAIL;
-    }
-    return {};
-}
-
-std::expected<void, SetupError> OrderGateway::listen_for_requests() {
-    if (listen(socket_, 1) == SOCKET_ERROR) {
-        WSACleanup();
-        return SetupError::LISTEN_FAIL;
-    }
-    return {};
-}
-
-//==== 2. Memory Helpers =====
-std::expected<void, SetupError> OrderGateway::setup_shared_memory() {
-
-    if (auto err = allocate(); !err) {
-        std::cout << "Gateway: file setup or mapping failed" << '\n';
-        return err;
-    }
-
-    std::experimental::scope_exit guard([&]() {
-        unmap_memory();
-    });
-
-    if (auto err = initialize_buffers(); !err) {
-        std::cout << "Gateway: initialize_buffers failed" << '\n';
-        return err;
-    }
-
-    return {};
-}
-
-std::expected<void, SetupError> OrderGateway::allocate() {
-    constexpr size_t INBOUND_BYTES = sizeof(RingBuffer<InboundMessage>);
-    constexpr size_t OUTBOUND_BYTES = sizeof(RingBuffer<OutboundMessage>);
-    constexpr size_t MEM_SIZE = INBOUND_BYTES + OUTBOUND_BYTES;
-
-    hMapFile_ = CreateFileMapping(
-        INVALID_HANDLE_VALUE,
-        nullptr,
-        PAGE_READWRITE,
-        0,
-        MEM_SIZE,
-        MAPPING_NAME);
-
-    if (!hMapFile_) {
-        return SetupError::ALLOC_FAIL;
-    }
-
-    base_ = MapViewOfFile(
-        hMapFile_,
-        FILE_MAP_ALL_ACCESS,
-        0,
-        0,
-        MEM_SIZE);
-
-    if (!base_) {
-        CloseHandle(hMapFile_);
-        return SetupError::MAP_FAIL;
-    }
-
-    return {};
-}
-
-std::expected<void, SetupError> OrderGateway::initialize_buffers() {
-    constexpr size_t INBOUND_BYTES = sizeof(RingBuffer<InboundMessage>);
-    inbound_buff_ = static_cast<RingBuffer<InboundMessage>*>(base_);
-
-    auto* outbound_base = static_cast<std::byte*>(base_) + INBOUND_BYTES;
-    outbound_client_msgs_ = reinterpret_cast<ClientMessageMap*>(outbound_base);
-}
-
-//===== 3. Destruction Helpers =====
-void OrderGateway::unmap_memory() {
-    if (base_) {
-        UnmapViewOfFile(base_);
-    }
-    if (hMapFile_) {
-        CloseHandle(hMapFile_);
-    }
-}
-
-//=============================================================================
-// run() function and the suite of helpers
-//=============================================================================
-void OrderGateway::run() {
-    for (;;) {
-        handle_client();
-    }
-}
-
-//===== 1. Inbound->Outbound Pipeline =====
-void OrderGateway::handle_client() {
-    SOCKET accept_socket = accept_connection();
-    if (accept_socket == INVALID_SOCKET) {
-        std::cout << "Gateway: accept failed: " << WSAGetLastError() << std::endl;
-        WSACleanup();
-        return;
-    }
-
-    std::optional<InboundMessage> inbound_opt = parse_message(accept_socket);
-    if (inbound_opt == std::nullopt) {
-        std::cout << "Gateway: recv failed" << std::endl;
-        return;
-    }
-    InboundMessage inbound_msg = inbound_opt.value();
-
-    if (!validate_message(inbound_msg)) {
-        if (send_fail(accept_socket, inbound_msg) == -1) {
-            std::cout << "Gateway: could not send failure message: " << WSAGetLastError() << '\n';
-        }
-        return;
-    }
-
-    inbound_buff_->push(inbound_msg);
-
-    {
-        std::shared_lock<std::shared_mutex> lock(client_mux_);
-        const OutboundMessage msg{outbound_client_msgs_->at(inbound_msg.client_id).front()};
-        int send_err = send_response(accept_socket, msg);
-        if (send_err == - 1) {
-            std::cout << "Gateway: sending response failed: " << WSAGetLastError() << '\n';
-
-            if (send_fail(accept_socket, inbound_msg) == -1) {
-                std::cout << "Gateway: could not send failure message: " << WSAGetLastError() << '\n';
+                gateway_.rx_ring_->push(msg);
+                gateway_.rx_notify_();
             }
-        }
+        });
+}
+
+void OrderGateway::Session::write(std::array<char, sizeof(OutboundMessage)> msg) {
+    auto self = shared_from_this();
+
+    boost::asio::async_write(
+        socket_,
+        boost::asio::buffer(msg),
+        [this, self, msg](boost::system::error_code ec, std::size_t) {
+            if (!ec) {
+                ClientId client_id;
+                std::memcpy(&client_id, msg.data(), sizeof(client_id));
+                read(client_id); // continue conversation
+            }
+        });
+}
+//=============================================================================
+// Special Member Functions
+//=============================================================================
+OrderGateway::OrderGateway(boost::asio::io_context& io, Port port)
+    : io_(io), acceptor_(io, tcp::endpoint(tcp::v4(), port)) {
+    void* rx_ptr{create_shm(INBOUND_SHM_NAME, RINGBUFFER_COUNT)};
+    rx_ring_ = static_cast<RingBuffer<InboundMessage>*>(rx_ptr);
+    void* tx_ptr{create_shm(OUTBOUND_SHM_NAME, RINGBUFFER_COUNT)};
+    tx_ring_ = static_cast<RingBuffer<OutboundMessage>*>(tx_ptr);
+}
+
+//=============================================================================
+// Inbound and Outbound Communications
+//=============================================================================
+//===== 1. Outbound->Inbound Pipeline =====
+void OrderGateway::start_accept() {
+    acceptor_.async_accept(
+        [this](boost::system::error_code ec, tcp::socket socket) {
+            if (!ec) {
+                ++next_client_id_;
+                handle_client(std::move(socket));
+            }
+            start_accept(); // accept next client
+        });
+}
+
+void OrderGateway::handle_client(tcp::socket socket) {
+    auto session = std::make_shared<Session>(*this, std::move(socket));
+    sessions_.insert(std::make_pair(next_client_id_.load(), session));
+    session->read(next_client_id_);
+}
+
+//===== 2. Inbound->Outbound Pipeline =====
+void OrderGateway::tx_push_trigger() {
+    if (!tx_dispatch_pending.exchange(true, std::memory_order_acq_rel)) {
+        boost::asio::post(io_, [this] {
+            tx_dispatch_pending.store(false, std::memory_order_release);
+            drain_tx_ring();
+        });
     }
-
-    closesocket(accept_socket);
 }
 
-//===== 1.1 Accepting Client Connection =====
-SOCKET OrderGateway::accept_connection() {
-    SOCKET accept_socket{INVALID_SOCKET};
-    accept_socket = accept(socket_, nullptr, nullptr);
-    return accept_socket;
-}
-
-//===== 1.2 Parsing a Client's Request =====
-std::optional<InboundMessage> OrderGateway::parse_message(const SOCKET& accept_socket) {
-    constexpr auto buffer_size = sizeof(InboundMessage);
-    char buffer[buffer_size];
-    int byte_count = recv(accept_socket, buffer, buffer_size, 0);
-
-    if (byte_count != buffer_size) {
-        return std::nullopt;
+void OrderGateway::drain_tx_ring() {
+    OutboundMessage msg{0};
+    while (tx_ring_->pop(msg)) {
+        route_tx_message(msg);
     }
-
-    InboundMessage msg{};
-    std::memcpy(&msg, buffer, buffer_size);
-    msg.client_id = static_cast<ClientId>(accept_socket);
-
-    return msg;
 }
 
-//===== 1.3 Sending a Generic Response to a Client =====
-int OrderGateway::send_response(SOCKET client_socket, const OutboundMessage msg) {
-    int bytes_sent = send(client_socket, reinterpret_cast<const char *>(&msg), sizeof(msg), 0);
-    if (bytes_sent != sizeof(OutboundMessage)) {
-        return -1;
-    }
+void OrderGateway::route_tx_message(const OutboundMessage& msg) {
+    auto buffer = std::bit_cast<std::array<char, sizeof(OutboundMessage)>>(msg);
 
-    return 0;
+    auto session = sessions_.at(msg.client_id);
+    session->write(buffer);
 }
 
-//===== 1.4 Generic Failure Helper Function =====
-int OrderGateway::send_fail(SOCKET client_socket, InboundMessage msg) {
-    OutboundMessage fail_msg{msg.client_id, msg.order_id, msg.message_type, Status::FAILURE};
-    if (send_response(client_socket, fail_msg) == -1) {
-        return -1;
-    }
-    return 0;
-}
-
-//===== 2. Validation Pipeline =====
+//=============================================================================
+// Validation Component
+//=============================================================================
+//===== 1 Validating Orders =====
 bool OrderGateway::validate_message(const InboundMessage& msg) {
+    if (!sessions_.contains(msg.client_id)) return false;
     return validate_new(msg) && validate_cancel(msg) && validate_modify(msg);
 }
 
-//===== 2.1 Validating NEW Orders =====
 bool OrderGateway::validate_new(const InboundMessage& msg) {
     uint8_t raw_message_type = static_cast<uint8_t>(msg.message_type);
     if (raw_message_type != 0) return false;
@@ -288,7 +134,6 @@ bool OrderGateway::validate_new(const InboundMessage& msg) {
     return true;
 }
 
-//===== 2.2 Validating CANCEL Orders =====
 bool OrderGateway::validate_cancel(const InboundMessage &msg) {
     uint8_t raw_message_type = static_cast<uint8_t>(msg.message_type);
     if (raw_message_type != 1) return false;
@@ -296,7 +141,6 @@ bool OrderGateway::validate_cancel(const InboundMessage &msg) {
     return true;
 }
 
-//===== 2.3 Validating Modify Orders =====
 bool OrderGateway::validate_modify(const InboundMessage &msg) {
     uint8_t raw_message_type = static_cast<uint8_t>(msg.message_type);
     if (raw_message_type != 2) return false;
@@ -313,4 +157,17 @@ bool OrderGateway::validate_modify(const InboundMessage &msg) {
     if (msg.quantity < 0 || msg.quantity > 1e6) return false;
 
     return true;
+}
+
+//===== 2. Responding to Invalid Orders =====
+void OrderGateway::communicate_failure(const InboundMessage& msg) {
+    OutboundMessage outbound{0};
+    outbound.client_id = msg.client_id;
+    outbound.order_id = msg.order_id;
+    outbound.message_type = msg.message_type;
+    outbound.status = Status::FAILURE;
+
+    auto buffer = std::bit_cast<std::array<char, sizeof(OutboundMessage)>>(outbound);
+    auto session = sessions_.at(msg.client_id);
+    session->write(buffer);
 }
