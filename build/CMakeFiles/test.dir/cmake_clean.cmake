@@ -1,6 +1,4 @@
 file(REMOVE_RECURSE
-  "CMakeFiles/test.dir/lib/RingBuffer.cpp.o"
-  "CMakeFiles/test.dir/lib/RingBuffer.cpp.o.d"
   "CMakeFiles/test.dir/src/Engine.cpp.o"
   "CMakeFiles/test.dir/src/Engine.cpp.o.d"
   "CMakeFiles/test.dir/src/OrderBook.cpp.o"

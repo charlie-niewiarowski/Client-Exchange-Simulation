@@ -72,7 +72,7 @@ void Engine::execute_request(InboundMessage msg) {
     OutboundMessage outbound_msg{msg.client_id, msg.order_id, msg.message_type, Status::SUCCESS};
     switch (msg.message_type) {
         case MessageType::NEW:
-            add_order(OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
+            add_order(-1, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
             break;
         case MessageType::CANCEL:
             if (!orders_.contains(msg.order_id)) {
@@ -97,14 +97,14 @@ void Engine::execute_request(InboundMessage msg) {
 }
 
 //===== 1.1.1. Add Order To the Orderbook =====
-void Engine::add_order(OrderRequest order_request) {
-    auto id = next_id_++;
+void Engine::add_order(OrderId id, OrderRequest order_request) {
+    if (id < 0) id = next_id_++;
     Order order{id, order_request};
 
     auto side = order_request.get_side();
     auto price = order_request.get_price();
 
-    if (orders_.contains(id) || !can_match(side, price)) return;
+    if (orders_.contains(id)) return;
 
     if (side == Side::BID) {
         if (!bids_.contains(price)) {
@@ -151,15 +151,23 @@ void Engine::cancel_order(OrderId id) {
 
 //===== 1.1.3. Modify a Given Order =====
 void Engine::modify_order(OrderId id, OrderRequest order_request) {
+    if (!orders_.contains(id)) return;
     auto& order = orders_.at(id);
-    order = Order{id, order_request};
 
-    return match_orders();
+    auto new_price = order_request.get_price();
+    auto new_quantity = order_request.get_quantity();
+    if (new_price != order.price_ || new_quantity != order.initial_quantity_) {
+        cancel_order(id);
+        add_order(id, order_request);
+    }
+    else {
+        order = Order{id, order_request};
+    }
 }
 
 //===== 1.2. Order Matching Mechanism =====
 void Engine::match_orders() {
-    while (!bids_.empty() || !asks_.empty()) {
+    while (!bids_.empty() && !asks_.empty()) {
         auto& [bid_price, highest_bids] = *bids_.begin();
         auto& [ask_price, lowest_asks] = *asks_.begin();
         if (bid_price < ask_price) break;
@@ -173,6 +181,15 @@ void Engine::match_orders() {
 
             // fill the orders
             auto fill_quantity = std::min(bid.remaining_quantity_, ask.remaining_quantity_);
+
+            // capture trade info before fills mutate the orders
+            Trade trade{
+                TradeInfo(bid.client_id_, bid.id_, bid.price_, fill_quantity),
+                TradeInfo(ask.client_id_, ask.id_, ask.price_, fill_quantity)
+            };
+            OutboundMessage buy_msg(bid.client_id_, bid.id_, MessageType::MATCH, Status::SUCCESS);
+            OutboundMessage ask_msg(ask.client_id_, ask.id_, MessageType::MATCH, Status::SUCCESS);
+
             bid.fill(fill_quantity);
             ask.fill(fill_quantity);
 
@@ -186,29 +203,20 @@ void Engine::match_orders() {
                 orders_.erase(ask_id);
             }
 
-            // remove PriceLevelQueue if empty
-            if (highest_bids.empty()) {
-                bids_.erase(bid_price);
-            }
-            if (lowest_asks.empty()) {
-                asks_.erase(ask_price);
-            }
-
             {
                 std::unique_lock<std::shared_mutex> lock(trades_mux_);
-                trades_buffer_.push(Trade{
-                    TradeInfo(bid.client_id_, bid.id_, bid.price_, fill_quantity),
-                    TradeInfo(ask.client_id_, ask.id_, ask.price_, fill_quantity)}
-                );
-
-                OutboundMessage buy_msg(bid.client_id_, bid.id_, MessageType::MATCH, Status::SUCCESS);
-                OutboundMessage ask_msg(ask.client_id_, ask.id_, MessageType::MATCH, Status::SUCCESS);
-
+                trades_buffer_.push(trade);
                 tx_ring->push(buy_msg);
                 tx_ring->push(ask_msg);
                 tx_notify_();
             }
 
+            // erase empty price levels and break to avoid dangling references
+            bool bid_level_done = highest_bids.empty();
+            bool ask_level_done = lowest_asks.empty();
+            if (bid_level_done) bids_.erase(bid_price);
+            if (ask_level_done) asks_.erase(ask_price);
+            if (bid_level_done || ask_level_done) break;
         }
     }
 }
@@ -256,4 +264,54 @@ void Engine::write_to_console(const Trade &trade) {
                            << " order_id: " << ask.order_id
                            << " price: " << ask.price
                            << "quantity: " << ask.quantity << "\n";
+}
+
+//=============================================================================
+// Test Accessors
+//=============================================================================
+void Engine::setup_local_rings() {
+    local_rx_ring_ = std::make_unique<RingBuffer<InboundMessage>>(RINGBUFFER_COUNT);
+    local_tx_ring_ = std::make_unique<RingBuffer<OutboundMessage>>(RINGBUFFER_COUNT);
+    rx_ring = local_rx_ring_.get();
+    tx_ring = local_tx_ring_.get();
+}
+
+OrderId Engine::direct_add(const OrderRequest& req) {
+    auto id = next_id_++;
+    Order order{id, req};
+    orders_.insert({id, order});
+    if (req.get_side() == Side::BID) {
+        bids_[req.get_price()].push_back(id);
+    } else {
+        asks_[req.get_price()].push_back(id);
+    }
+    return id;
+}
+
+void Engine::push_inbound(const InboundMessage& msg) {
+    rx_ring->push(msg);
+    rx_push_trigger();
+}
+
+bool Engine::pop_outbound(OutboundMessage& msg) {
+    return tx_ring->pop(msg);
+}
+
+bool Engine::pop_trade(Trade& trade) {
+    std::unique_lock<std::shared_mutex> lock(trades_mux_);
+    return trades_buffer_.pop(trade);
+}
+
+void Engine::trigger_matching() {
+    match_orders();
+}
+
+size_t Engine::bids_at(Price price) const {
+    auto it = bids_.find(price);
+    return it == bids_.end() ? 0 : it->second.size();
+}
+
+size_t Engine::asks_at(Price price) const {
+    auto it = asks_.find(price);
+    return it == asks_.end() ? 0 : it->second.size();
 }

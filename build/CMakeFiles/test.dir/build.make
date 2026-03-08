@@ -125,24 +125,10 @@ CMakeFiles/test.dir/src/OrderBook.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/test.dir/src/OrderBook.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/cniew/CLionProjects/ToyExchange/src/OrderBook.cpp -o CMakeFiles/test.dir/src/OrderBook.cpp.s
 
-CMakeFiles/test.dir/lib/RingBuffer.cpp.o: CMakeFiles/test.dir/flags.make
-CMakeFiles/test.dir/lib/RingBuffer.cpp.o: /home/cniew/CLionProjects/ToyExchange/lib/RingBuffer.cpp
-CMakeFiles/test.dir/lib/RingBuffer.cpp.o: CMakeFiles/test.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/cniew/CLionProjects/ToyExchange/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/test.dir/lib/RingBuffer.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/test.dir/lib/RingBuffer.cpp.o -MF CMakeFiles/test.dir/lib/RingBuffer.cpp.o.d -o CMakeFiles/test.dir/lib/RingBuffer.cpp.o -c /home/cniew/CLionProjects/ToyExchange/lib/RingBuffer.cpp
-
-CMakeFiles/test.dir/lib/RingBuffer.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Preprocessing CXX source to CMakeFiles/test.dir/lib/RingBuffer.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/cniew/CLionProjects/ToyExchange/lib/RingBuffer.cpp > CMakeFiles/test.dir/lib/RingBuffer.cpp.i
-
-CMakeFiles/test.dir/lib/RingBuffer.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green "Compiling CXX source to assembly CMakeFiles/test.dir/lib/RingBuffer.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/cniew/CLionProjects/ToyExchange/lib/RingBuffer.cpp -o CMakeFiles/test.dir/lib/RingBuffer.cpp.s
-
 CMakeFiles/test.dir/utils/shared_memory.cpp.o: CMakeFiles/test.dir/flags.make
 CMakeFiles/test.dir/utils/shared_memory.cpp.o: /home/cniew/CLionProjects/ToyExchange/utils/shared_memory.cpp
 CMakeFiles/test.dir/utils/shared_memory.cpp.o: CMakeFiles/test.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/cniew/CLionProjects/ToyExchange/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/test.dir/utils/shared_memory.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --progress-dir=/home/cniew/CLionProjects/ToyExchange/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/test.dir/utils/shared_memory.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/test.dir/utils/shared_memory.cpp.o -MF CMakeFiles/test.dir/utils/shared_memory.cpp.o.d -o CMakeFiles/test.dir/utils/shared_memory.cpp.o -c /home/cniew/CLionProjects/ToyExchange/utils/shared_memory.cpp
 
 CMakeFiles/test.dir/utils/shared_memory.cpp.i: cmake_force
@@ -159,7 +145,6 @@ test_OBJECTS = \
 "CMakeFiles/test.dir/src/Engine.cpp.o" \
 "CMakeFiles/test.dir/src/OrderGateway.cpp.o" \
 "CMakeFiles/test.dir/src/OrderBook.cpp.o" \
-"CMakeFiles/test.dir/lib/RingBuffer.cpp.o" \
 "CMakeFiles/test.dir/utils/shared_memory.cpp.o"
 
 # External object files for target test
@@ -169,13 +154,12 @@ test: CMakeFiles/test.dir/tests/engine_test.cpp.o
 test: CMakeFiles/test.dir/src/Engine.cpp.o
 test: CMakeFiles/test.dir/src/OrderGateway.cpp.o
 test: CMakeFiles/test.dir/src/OrderBook.cpp.o
-test: CMakeFiles/test.dir/lib/RingBuffer.cpp.o
 test: CMakeFiles/test.dir/utils/shared_memory.cpp.o
 test: CMakeFiles/test.dir/build.make
 test: lib/libgtest_main.a
 test: lib/libgtest.a
 test: CMakeFiles/test.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/cniew/CLionProjects/ToyExchange/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Linking CXX executable test"
+	@$(CMAKE_COMMAND) -E cmake_echo_color --switch=$(COLOR) --green --bold --progress-dir=/home/cniew/CLionProjects/ToyExchange/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Linking CXX executable test"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/test.dir/link.txt --verbose=$(VERBOSE)
 	/usr/bin/cmake -D TEST_TARGET=test -D TEST_EXECUTABLE=/home/cniew/CLionProjects/ToyExchange/build/test -D TEST_EXECUTOR= -D TEST_WORKING_DIR=/home/cniew/CLionProjects/ToyExchange/build -D TEST_EXTRA_ARGS= -D TEST_PROPERTIES= -D TEST_PREFIX= -D TEST_SUFFIX= -D TEST_FILTER= -D NO_PRETTY_TYPES=FALSE -D NO_PRETTY_VALUES=FALSE -D TEST_LIST=test_TESTS -D CTEST_FILE=/home/cniew/CLionProjects/ToyExchange/build/test[1]_tests.cmake -D TEST_DISCOVERY_TIMEOUT=5 -D TEST_XML_OUTPUT_DIR= -P /usr/share/cmake-3.25/Modules/GoogleTestAddTests.cmake
 

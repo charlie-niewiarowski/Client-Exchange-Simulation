@@ -6,5 +6,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -isystem /home/cniew/CLionProjects/ToyExchange/build/_deps/googletest-src/googletest/include -isystem /home/cniew/CLionProjects/ToyExchange/build/_deps/googletest-src/googletest
 
-CXX_FLAGS = -std=gnu++23
+CXX_FLAGS = -g -std=gnu++23
 

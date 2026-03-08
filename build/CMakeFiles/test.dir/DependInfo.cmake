@@ -8,7 +8,6 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/cniew/CLionProjects/ToyExchange/lib/RingBuffer.cpp" "CMakeFiles/test.dir/lib/RingBuffer.cpp.o" "gcc" "CMakeFiles/test.dir/lib/RingBuffer.cpp.o.d"
   "/home/cniew/CLionProjects/ToyExchange/src/Engine.cpp" "CMakeFiles/test.dir/src/Engine.cpp.o" "gcc" "CMakeFiles/test.dir/src/Engine.cpp.o.d"
   "/home/cniew/CLionProjects/ToyExchange/src/OrderBook.cpp" "CMakeFiles/test.dir/src/OrderBook.cpp.o" "gcc" "CMakeFiles/test.dir/src/OrderBook.cpp.o.d"
   "/home/cniew/CLionProjects/ToyExchange/src/OrderGateway.cpp" "CMakeFiles/test.dir/src/OrderGateway.cpp.o" "gcc" "CMakeFiles/test.dir/src/OrderGateway.cpp.o.d"

@@ -226,30 +226,6 @@ gtest_main/fast:
 	$(MAKE) $(MAKESILENT) -f _deps/googletest-build/googletest/CMakeFiles/gtest_main.dir/build.make _deps/googletest-build/googletest/CMakeFiles/gtest_main.dir/build
 .PHONY : gtest_main/fast
 
-lib/RingBuffer.o: lib/RingBuffer.cpp.o
-.PHONY : lib/RingBuffer.o
-
-# target to build an object file
-lib/RingBuffer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/lib/RingBuffer.cpp.o
-.PHONY : lib/RingBuffer.cpp.o
-
-lib/RingBuffer.i: lib/RingBuffer.cpp.i
-.PHONY : lib/RingBuffer.i
-
-# target to preprocess a source file
-lib/RingBuffer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/lib/RingBuffer.cpp.i
-.PHONY : lib/RingBuffer.cpp.i
-
-lib/RingBuffer.s: lib/RingBuffer.cpp.s
-.PHONY : lib/RingBuffer.s
-
-# target to generate assembly for a file
-lib/RingBuffer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/test.dir/build.make CMakeFiles/test.dir/lib/RingBuffer.cpp.s
-.PHONY : lib/RingBuffer.cpp.s
-
 src/Engine.o: src/Engine.cpp.o
 .PHONY : src/Engine.o
 
@@ -387,9 +363,6 @@ help:
 	@echo "... gtest"
 	@echo "... gtest_main"
 	@echo "... test"
-	@echo "... lib/RingBuffer.o"
-	@echo "... lib/RingBuffer.i"
-	@echo "... lib/RingBuffer.s"
 	@echo "... src/Engine.o"
 	@echo "... src/Engine.i"
 	@echo "... src/Engine.s"
