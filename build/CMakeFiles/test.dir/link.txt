@@ -1,1 +1,0 @@
-/usr/bin/c++ -g CMakeFiles/test.dir/tests/engine_test.cpp.o CMakeFiles/test.dir/src/Engine.cpp.o CMakeFiles/test.dir/src/OrderGateway.cpp.o CMakeFiles/test.dir/src/OrderBook.cpp.o CMakeFiles/test.dir/utils/shared_memory.cpp.o -o test  lib/libgtest_main.a lib/libgtest.a 
