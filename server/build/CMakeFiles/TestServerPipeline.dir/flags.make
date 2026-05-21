@@ -6,5 +6,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/home/cniew/CLionProjects/ToyExchange/server/include -I/home/cniew/CLionProjects/ToyExchange/server/tests -I/home/cniew/CLionProjects/ToyExchange/server/../include
 
-CXX_FLAGS = -std=gnu++23
+CXX_FLAGS = -g -std=gnu++23
 

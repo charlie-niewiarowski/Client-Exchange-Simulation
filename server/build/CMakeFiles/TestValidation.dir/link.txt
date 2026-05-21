@@ -1,1 +1,1 @@
-/usr/bin/c++ CMakeFiles/TestValidation.dir/tests/test_validation.cpp.o -o TestValidation 
+/usr/bin/c++ -g CMakeFiles/TestValidation.dir/tests/test_validation.cpp.o -o TestValidation 
