@@ -1,0 +1,101 @@
+Start testing: May 20 21:15 CDT
+----------------------------------------------------------
+1/3 Testing: TestValidation
+1/3 Test: TestValidation
+Command: "/home/cniew/CLionProjects/ToyExchange/server/build/TestValidation"
+Directory: /home/cniew/CLionProjects/ToyExchange/server/build
+"TestValidation" start time: May 20 21:15 CDT
+Output:
+----------------------------------------------------------
+=== Validation ===
+  [PASS] validate_new: bid limit valid
+  [PASS] validate_new: ask limit valid
+  [PASS] validate_new: bid price=0 fails
+  [PASS] validate_new: ask price=0 passes
+  [PASS] validate_new: qty=0 passes
+  [PASS] validate_new: qty=1e6 passes
+  [PASS] validate_new: qty>1e6 fails
+  [PASS] validate_new: wrong message type fails
+  [PASS] validate_new: invalid side fails
+  [PASS] validate_new: invalid order type fails
+  [PASS] validate_new: market ask valid
+  [PASS] validate_cancel: valid cancel
+  [PASS] validate_cancel: wrong message type fails
+  [PASS] validate_cancel: MODIFY type fails
+  [PASS] validate_cancel: any order_id valid
+  [PASS] validate_modify: valid modify
+  [PASS] validate_modify: wrong message type fails
+  [PASS] validate_modify: bid price=0 fails
+  [PASS] validate_modify: ask price=0 passes
+  [PASS] validate_modify: qty>1e6 fails
+  [PASS] validate_modify: invalid side fails
+  [PASS] validate_modify: invalid order type fails
+  [PASS] validate_message: dispatches NEW
+  [PASS] validate_message: dispatches CANCEL
+  [PASS] validate_message: dispatches MODIFY
+  [PASS] validate_message: unknown type fails
+26/26 passed
+
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"TestValidation" end time: May 20 21:15 CDT
+"TestValidation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/3 Testing: TestServerPipeline
+2/3 Test: TestServerPipeline
+Command: "/home/cniew/CLionProjects/ToyExchange/server/build/TestServerPipeline"
+Directory: /home/cniew/CLionProjects/ToyExchange/server/build
+"TestServerPipeline" start time: May 20 21:15 CDT
+Output:
+----------------------------------------------------------
+=== Server Pipeline ===
+  [PASS] parseRequest: valid header → OK
+  [PASS] parseRequest: wrong prefix → ERROR malformed
+  [PASS] parseRequest: lowercase prefix → ERROR malformed
+  [PASS] parseRequest: client_id extracted correctly
+  [PASS] executeRequest: BID price=0 → ERROR invalid
+  [PASS] executeRequest: qty>1e6 → ERROR invalid
+  [PASS] executeRequest: MATCH type → ERROR invalid
+  FAIL [/home/cniew/CLionProjects/ToyExchange/server/tests/test_server_pipeline.cpp:164] resp.client_id (19717) != 5u (5)
+  [FAIL] executeRequest: valid CANCEL pushed to ring
+  FAIL [/home/cniew/CLionProjects/ToyExchange/server/tests/test_server_pipeline.cpp:183] resp.client_id (25351) != 7u (7)
+  [FAIL] executeRequest: valid MODIFY pushed to ring
+  [PASS] serializeResponse: OK contains correct ids
+  [PASS] serializeResponse: ERROR contains error string
+  [PASS] drainOutboundRing: two clients routed independently
+  [PASS] finishResponseCycle: connection reused after OK
+  [PASS] finishResponseCycle: connection reused after error
+12/14 passed  *** 2 FAILED ***
+
+<end of output>
+Test time =   1.13 sec
+----------------------------------------------------------
+Test Failed.
+"TestServerPipeline" end time: May 20 21:15 CDT
+"TestServerPipeline" time elapsed: 00:00:01
+----------------------------------------------------------
+
+3/3 Testing: TestIntegration
+3/3 Test: TestIntegration
+Command: "/home/cniew/CLionProjects/ToyExchange/server/build/TestIntegration"
+Directory: /home/cniew/CLionProjects/ToyExchange/server/build
+"TestIntegration" start time: May 20 21:15 CDT
+Output:
+----------------------------------------------------------
+=== Integration ===
+  FAIL [/home/cniew/CLionProjects/ToyExchange/server/tests/test_integration.cpp:65] r2.client_id (9830401) != 1u (1)
+  [FAIL] multi-client mixed requests
+0/1 passed  *** 1 FAILED ***
+
+<end of output>
+Test time =   0.08 sec
+----------------------------------------------------------
+Test Failed.
+"TestIntegration" end time: May 20 21:15 CDT
+"TestIntegration" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: May 20 21:15 CDT

@@ -1,0 +1,6 @@
+/home/cniew/CLionProjects/ToyExchange/server/build/CMakeFiles/TestValidation.dir
+/home/cniew/CLionProjects/ToyExchange/server/build/CMakeFiles/TestServerPipeline.dir
+/home/cniew/CLionProjects/ToyExchange/server/build/CMakeFiles/TestIntegration.dir
+/home/cniew/CLionProjects/ToyExchange/server/build/CMakeFiles/test.dir
+/home/cniew/CLionProjects/ToyExchange/server/build/CMakeFiles/edit_cache.dir
+/home/cniew/CLionProjects/ToyExchange/server/build/CMakeFiles/rebuild_cache.dir
