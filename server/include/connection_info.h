@@ -8,10 +8,9 @@
 #include "protocol.h"
 #include "socket.h"
 #include "buffer.h"
-#include "ring_buffer.hpp"
+#include "../../include/ring_buffer.hpp"
 
 #include <algorithm>
-#include <optional>
 
 using OutboundQueue = RingBuffer<OutboundMessage>;
 

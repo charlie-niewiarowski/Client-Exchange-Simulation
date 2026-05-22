@@ -43,6 +43,7 @@ Engine::Engine(InboundRing& in_ring, OutboundRing& out_ring)
 //=============================================================================
 void Engine::run() {
     std::jthread matching_thread([&]() {
+        std::cerr << "matching thread: " << gettid() << std::endl;
        handleMatching();
     });
 
@@ -54,6 +55,16 @@ void Engine::run() {
     std::jthread io_thread([&]() {
        exposeTrades();
     });
+}
+
+//=============================================================================
+// step()  — test interface, processes all pending inbound messages once
+//=============================================================================
+void Engine::step() {
+    InboundMessage msg{};
+    while (in_ring_.pop(msg)) {
+        executeRequest(msg);
+    }
 }
 
 //=============================================================================
@@ -83,10 +94,14 @@ void Engine::exposeTrades() {
 // matching helpers
 //=============================================================================
 void Engine::executeRequest(InboundMessage msg) {
-    OutboundMessage outbound_msg{msg.client_id, msg.order_id, msg.message_type, Status::SUCCESS};
+    // For NEW orders assign the id now so it can be returned in the response.
+    OrderId assigned_id = (msg.message_type == MessageType::NEW) ? next_id_++ : msg.order_id;
+    OutboundMessage outbound_msg{msg.client_id, assigned_id, msg.message_type, Status::SUCCESS};
+    bool suppress_ack = false;
+
     switch (msg.message_type) {
         case MessageType::NEW:
-            addOrder(-1, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
+            suppress_ack = addOrder(assigned_id, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
             break;
         case MessageType::CANCEL:
             if (!orders_.contains(msg.order_id) || orders_.at(msg.order_id).client_id_ != msg.client_id) {
@@ -96,28 +111,31 @@ void Engine::executeRequest(InboundMessage msg) {
             cancelOrder(msg.order_id);
             break;
         case MessageType::MODIFY:
-            if (!orders_.contains(msg.order_id) || orders_.at(msg.order_id).client_id_ != msg.client_id) {
+            if (!orders_.contains(msg.order_id)
+                    || orders_.at(msg.order_id).client_id_ != msg.client_id
+                    || orders_.at(msg.order_id).side_ != msg.side) {
                 outbound_msg.status = Status::FAILURE;
                 break;
             }
-            modifyOrder(msg.order_id, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
+            suppress_ack = modifyOrder(msg.order_id, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
             break;
         default:
             std::cerr << "engine: Inbound message attempted unknown request";
             outbound_msg.status = Status::FAILURE;
     }
 
-    out_ring_.push(outbound_msg);
+    if (!suppress_ack) {
+        out_ring_.push(outbound_msg);
+    }
 }
 
-void Engine::addOrder(OrderId id, OrderRequest order_request) {
-    if (id < 0) id = next_id_++;
+bool Engine::addOrder(OrderId id, OrderRequest order_request) {
     Order order{id, order_request};
 
     auto side = order_request.get_side();
     auto price = order_request.get_price();
 
-    if (orders_.contains(id)) return;
+    if (orders_.contains(id)) return false;
 
     if (side == Side::BID) {
         if (!bids_.contains(price)) {
@@ -135,7 +153,7 @@ void Engine::addOrder(OrderId id, OrderRequest order_request) {
 
     orders_.insert(std::make_pair(id, order));
 
-    matchOrders();
+    return matchOrders();
 }
 
 void Engine::cancelOrder(OrderId id) {
@@ -161,23 +179,23 @@ void Engine::cancelOrder(OrderId id) {
     orders_.erase(id);
 }
 
-void Engine::modifyOrder(OrderId id, OrderRequest order_request) {
+bool Engine::modifyOrder(OrderId id, OrderRequest order_request) {
     auto& order = orders_.at(id);
 
     auto new_price = order_request.get_price();
     auto new_quantity = order_request.get_quantity();
     if (new_price != order.price_ || new_quantity != order.initial_quantity_) {
         cancelOrder(id);
-        addOrder(id, order_request);
-    }
-    else {
-        order = Order{id, order_request};
+        return addOrder(id, order_request);
     }
 
-    matchOrders();
+    order = Order{id, order_request};
+    return matchOrders();
 }
 
-void Engine::matchOrders() {
+bool Engine::matchOrders() {
+    bool any_filled = false;
+
     while (!bids_.empty() && !asks_.empty()) {
         auto& [bid_price, highest_bids] = *bids_.begin();
         auto& [ask_price, lowest_asks] = *asks_.begin();
@@ -197,6 +215,7 @@ void Engine::matchOrders() {
             if (!either_market && !prices_cross) break;
 
             level_matched = true;
+            any_filled = true;
 
             // fill the orders
             auto fill_quantity = std::min(bid.remaining_quantity_, ask.remaining_quantity_);
@@ -236,6 +255,8 @@ void Engine::matchOrders() {
 
         if (!level_matched) break;
     }
+
+    return any_filled;
 }
 
 bool Engine::canMatch(Side side, Price price) const {
@@ -262,9 +283,9 @@ void write_to_console(const Trade &trade) {
     std::cout << "bid -> " << "client_id: " << bid.client_id_
                            << " order_id: " << bid.order_id
                            << " price: " << bid.price
-                           << "quantity: " << bid.quantity << "\n";
+                           << " quantity: " << bid.quantity << "\n";
     std::cout << "ask -> " << "client_id: " << ask.client_id_
                            << " order_id: " << ask.order_id
                            << " price: " << ask.price
-                           << "quantity: " << ask.quantity << "\n";
+                           << " quantity: " << ask.quantity << "\n\n";
 }

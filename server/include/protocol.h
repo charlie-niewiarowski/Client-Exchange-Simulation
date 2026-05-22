@@ -5,7 +5,7 @@
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
-#include "communication_types.h"
+#include "../../include/communication_types.h"
 
 inline constexpr size_t INBOUND_BSIZE  = 9  + sizeof(InboundMessage);
 inline constexpr size_t OUTBOUND_BSIZE = std::max<size_t>(64, 13 + sizeof(OutboundMessage));

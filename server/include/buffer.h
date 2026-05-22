@@ -26,6 +26,7 @@ public:
 
     // utility state change
     void overwrite(size_t start, const char *src);
+    void overwrite(size_t start, const char *src, size_t len);
     void clear() { len_ = 0; bytes_written_ = 0; }
 
 private:

@@ -5,13 +5,12 @@ set(CMAKE_CXX_STANDARD 23)
 
 add_library(common_lib INTERFACE
         include/order_types.h
-        engine/config/macros.h
-        server/config/config.h)
+)
 target_include_directories(common_lib INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-add_executable(RunExchange app/main.cpp
+add_executable(exchange app/main.cpp
         app/exchange.cpp
 
         engine/src/engine.cpp
@@ -21,6 +20,4 @@ add_executable(RunExchange app/main.cpp
         server/src/server.cpp
 )
 
-add_executable(SingleClient tests/tests.cpp)
-
-target_link_libraries(RunExchange PUBLIC common_lib)
+target_link_libraries(exchange PUBLIC common_lib)

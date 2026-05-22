@@ -6,13 +6,15 @@
 #define TOYEXCHANGE_ORDERGATEWAY_HPP
 
 #include "connection_info.h"
-#include "communication_types.h"
+#include "../../include/communication_types.h"
+#include "../config/config.h"
 
+#include <atomic>
 #include <sys/epoll.h>
 #include <unordered_set>
+#include <optional>
 
-#define MAX_CLIENTS 100
-#define PORT "4000"
+
 
 class Server {
 public:
@@ -34,6 +36,7 @@ public:
      * or handles client connections
     */
     void run();
+    void stop() { running_.store(false, std::memory_order_relaxed); }
 private:
     //===== data structures =====
     std::unordered_map<int, ConnectionInfo> info_map_; // map of file descriptors to important info about connection
@@ -43,6 +46,8 @@ private:
     // should reference actual objects in memory that were provided by the parent class
     InboundRing& in_ring_;
     OutboundRing& out_ring_;
+
+    std::atomic<bool> running_{true};
 
     // epoll data
     int epoll_fd_ = -1;

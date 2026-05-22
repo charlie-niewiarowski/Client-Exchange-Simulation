@@ -30,6 +30,25 @@ public:
     ~Engine() = default;
 
     void run();
+
+    // Testing
+    void step();
+    size_t order_count()     const { return orders_.size(); }
+    size_t bid_level_count() const { return bids_.size(); }
+    size_t ask_level_count() const { return asks_.size(); }
+    size_t bids_at(Price p) const {
+        auto it = bids_.find(p);
+        return it != bids_.end() ? it->second.size() : 0u;
+    }
+    size_t asks_at(Price p) const {
+        auto it = asks_.find(p);
+        return it != asks_.end() ? it->second.size() : 0u;
+    }
+    bool has_order(OrderId id) const { return orders_.contains(id); }
+    bool pop_outbound(OutboundMessage& msg) { return out_ring_.pop(msg); }
+    bool pop_trade(Trade& t) { return trades_ring_.pop(t); }
+    OrderId next_order_id() const { return next_id_.load(std::memory_order_relaxed); }
+
 private:
     class Order { // main data variable
     public:
@@ -72,10 +91,10 @@ private:
 
     // matching helpers
     void executeRequest(InboundMessage msg);
-    void addOrder(OrderId id, OrderRequest order_request);
+    bool addOrder(OrderId id, OrderRequest order_request);
     void cancelOrder(OrderId id);
-    void modifyOrder(OrderId id, OrderRequest request);
-    void matchOrders();
+    bool modifyOrder(OrderId id, OrderRequest request);
+    bool matchOrders();
     bool canMatch(Side side, Price price) const;
 };
 

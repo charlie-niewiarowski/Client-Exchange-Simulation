@@ -3,6 +3,7 @@
 //
 
 #include "../include/server.h"
+#include "../include/validation.h"
 
 #include <cstring>
 #include <sys/socket.h>
@@ -11,18 +12,9 @@
 #include <fcntl.h>
 #include <filesystem>
 
-#include "../tests/client.h"
-
-#define ever (;;)
-
 //=============================================================================
-// Forward-declared free forms
+// Forward-Declared Helpers
 //=============================================================================
-
-static bool validate_message(const InboundMessage& msg);
-static bool validate_new(const InboundMessage& msg);
-static bool validate_cancel(const InboundMessage& msg);
-static bool validate_modify(const InboundMessage& msg);
 
 static int epoll_ctrl(int epoll_fd, int fd, int op, int target);
 
@@ -48,7 +40,7 @@ void Server::run() {
     if (!socket_setup.has_value()) return;
     const EpollSocket listen_sock = std::move(socket_setup.value());
 
-    for ever {
+    while (running_.load(std::memory_order_relaxed)) {
         int nfds = epoll_wait(epoll_fd_, events_, MAX_CLIENTS, 0);
 
         if (nfds == -1) {
@@ -176,10 +168,16 @@ void Server::handleRequests(const int client_fd) {
             [[fallthrough]];
         case ConnectionState::EXECUTING:
             executeRequest(info);
-            if (info.state() != ConnectionState::SERIALIZING) break;
-            [[fallthrough]];
+            break;
         default:
             break;
+    }
+
+    // Immediately flush error responses: parse/execute errors set SERIALIZING without
+    // pushing to the outbound ring, so drainOutboundRing never picks them up.
+    if (info_map_.contains(client_fd) && info.has_error()) {
+        serializeResponse(info);
+        sendResponse(info);
     }
 }
 
@@ -198,6 +196,10 @@ void Server::drainOutboundRing() {
 
         ConnectionInfo *info{client_map_.at(msg.client_id)};
         info->push_outbound(msg);
+
+        if (info->state() == ConnectionState::READING && info->buffer().length() == 0) {
+            info->set_state(ConnectionState::SERIALIZING);
+        }
 
         writable_fds_.insert(info->fd());
     }
@@ -292,6 +294,7 @@ void Server::serializeResponse(ConnectionInfo &info) {
 
     const char *status = info.has_error() ? "EXCHANGE\nERROR\n" : "EXCHANGE\nOK\n";
     Buffer& buf = info.buffer();
+    buf.clear();
     buf.overwrite(0, status);
 
     if (info.has_error()) {
@@ -301,7 +304,7 @@ void Server::serializeResponse(ConnectionInfo &info) {
         memcpy(cid_buf, &msg.client_id, sizeof(ClientId));
         memcpy(cid_buf + sizeof(ClientId), &msg.order_id, sizeof(OrderId));
 
-        buf.overwrite(strlen(status), cid_buf);
+        buf.overwrite(strlen(status), cid_buf, sizeof(cid_buf));
     }
 
     info.set_state(ConnectionState::SENDING);
@@ -319,15 +322,17 @@ void Server::sendResponse(ConnectionInfo& info) {
     const int client_fd = info.fd();
     const ssize_t n = buf.write_to(client_fd);
 
-    if (n == buf.length()) {
+    if (buf.bytes_written() == buf.length()) {
         finishResponseCycle(info);
-
     }
     else if (n == 0) {
         closeConnection(client_fd);
     }
     else if (n > 0 || errno == EAGAIN || errno == EWOULDBLOCK) {
         epoll_ctrl(epoll_fd_, client_fd, EPOLL_CTL_MOD, EPOLLIN | EPOLLOUT);
+    }
+    else {
+        closeConnection(client_fd);
     }
 }
 
@@ -348,68 +353,21 @@ void Server::closeConnection(int client_fd) {
 void Server::finishResponseCycle(ConnectionInfo& info) {
     info.buffer().clear();
     info.clear_error();
-    info.set_state(ConnectionState::READING);
 
-    epoll_ctrl(epoll_fd_, info.fd(), EPOLL_CTL_MOD, EPOLLIN);
-}
-
-//=============================================================================
-// Forward-declared helper implementations
-//=============================================================================
-
-static bool validate_message(const InboundMessage &msg) {
-    switch (msg.message_type) {
-        case MessageType::NEW: return validate_new(msg);
-        case MessageType::CANCEL: return validate_cancel(msg);
-        case MessageType::MODIFY: return validate_modify(msg);
-        default: return false;
+    if (info.has_pending_outbound()) {
+        serializeResponse(info);
+        sendResponse(info);
+    } else {
+        info.set_state(ConnectionState::READING);
+        epoll_ctrl(epoll_fd_, info.fd(), EPOLL_CTL_MOD, EPOLLIN);
     }
 }
 
-static bool validate_new(const InboundMessage &msg) {
-    auto raw_message_type = static_cast<uint8_t>(msg.message_type);
-    if (raw_message_type != 0) return false;
+//=============================================================================
+// Forward-Declared Helper Impls
+//=============================================================================
 
-    auto raw_side = static_cast<uint8_t>(msg.side);
-    if (raw_side != 0 && raw_side != 1) return false;
-
-    auto raw_order_type = static_cast<uint8_t>(msg.order_type);
-    if (raw_order_type != 0 && raw_order_type != 1) return false;
-
-    if (msg.side == Side::BID && msg.price <= 0) return false;
-    if (msg.side == Side::ASK && msg.price < 0) return false;
-
-    if (msg.quantity < 0 || msg.quantity > 1e6) return false;
-
-    return true;
-}
-
-static bool validate_cancel(const InboundMessage &msg) {
-    auto raw_message_type = static_cast<uint8_t>(msg.message_type);
-    if (raw_message_type != 1) return false;
-
-    return true;
-}
-
-static bool validate_modify(const InboundMessage &msg) {
-    auto raw_message_type = static_cast<uint8_t>(msg.message_type);
-    if (raw_message_type != 2) return false;
-
-    auto raw_side = static_cast<uint8_t>(msg.side);
-    if (raw_side != 0 && raw_side != 1) return false;
-
-    auto raw_order_type = static_cast<uint8_t>(msg.order_type);
-    if (raw_order_type != 0 && raw_order_type != 1) return false;
-
-    if (msg.side == Side::BID && msg.price <= 0) return false;
-    if (msg.side == Side::ASK && msg.price < 0) return false;
-
-    if (msg.quantity < 0 || msg.quantity > 1e6) return false;
-
-    return true;
-}
-
-static int epoll_ctrl(int epoll_fd, int fd, int op, int target)  {
+static int epoll_ctrl(int epoll_fd, int fd, int op, int target) {
     epoll_event ev{};
     ev.events = target;
     ev.data.fd = fd;

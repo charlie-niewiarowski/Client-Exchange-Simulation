@@ -21,8 +21,14 @@ ssize_t Buffer::write_to(int fd) {
 }
 
 void Buffer::overwrite(size_t start, const char *src) {
-    assert(bytes_written_ == 0); // make sure we're not overwriting data that needs to be written
+    assert(bytes_written_ == 0);
+    const size_t n = strlen(src);
+    memcpy(data_ + start, src, n);
+    len_ = std::max(len_, start + n);
+}
 
-    memcpy(data_ + start, src, strlen(src));
-    len_ = std::max(len_, start + strlen(src));
+void Buffer::overwrite(size_t start, const char *src, size_t len) {
+    assert(bytes_written_ == 0);
+    memcpy(data_ + start, src, len);
+    len_ = std::max(len_, start + len);
 }
