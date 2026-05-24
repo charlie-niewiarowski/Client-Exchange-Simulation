@@ -22,9 +22,10 @@
 // Logging (stderr, controlled by LOG_ENABLED in config.h):
 //
 //   Client   7: [SEND] NEW    LIMIT BID  price=  150  qty=   20
-//   Client   7: [OK]   NEW    order_id=17
+//   Client   7: [ACK]  NEW    order_id=17          ← direct response to our request
 //   Client   7: [SEND] CANCEL  order_id=17
-//   Client   7: [OK]   CANCEL  order_id=17
+//   Client   7: [ACK]  CANCEL  order_id=17
+//   Client   7: [MATCH] order_id=17                ← unsolicited fill notification
 //   Client   7: [SEND] GARBAGE
 //   Client   7: [ERR]  GARB  : malformed request
 //   Client   7: [SEND] INVALID  (price=0 qty=100)
@@ -58,8 +59,10 @@ public:
 
     struct Stats {
         uint64_t requests_sent;
-        uint64_t responses_ok;
+        uint64_t responses_ack;
+        uint64_t responses_match;
         uint64_t responses_err;
+        int64_t  orders_in_flight; // snapshot at time of call
     };
     [[nodiscard]] Stats stats() const;
 
@@ -100,7 +103,8 @@ private:
     static void logConnect   (const ClientState& cs);
     static void logDisconnect(const ClientState& cs);
     static void logSend      (const ClientState& cs);
-    static void logOk        (const ClientState& cs, OrderId oid);
+    static void logAck       (const ClientState& cs, OrderId oid);
+    static void logMatch     (const ClientState& cs, OrderId oid);
     static void logErr       (const ClientState& cs, const char* msg, size_t len);
 };
 

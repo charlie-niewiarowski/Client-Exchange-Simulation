@@ -5,7 +5,7 @@
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
-#include "../../include/communication_types.h"
+#include "communication_types.h"
 
 #include <cstring>
 

@@ -15,7 +15,7 @@
 #include "order_request.h"
 #include "ring_buffer.hpp"
 #include "communication_types.h"
-#include "../config/macros.h"
+#include "macros.h"
 
 class Engine {
 
@@ -31,7 +31,8 @@ public:
 
     void run();
 
-    // Testing
+    // Testing — compiled in only when TESTING is defined in macros.h
+    #if TESTING
     void step();
     size_t order_count()     const { return orders_.size(); }
     size_t bid_level_count() const { return bids_.size(); }
@@ -48,6 +49,7 @@ public:
     bool pop_outbound(OutboundMessage& msg) { return out_ring_.pop(msg); }
     bool pop_trade(Trade& t) { return trades_ring_.pop(t); }
     OrderId next_order_id() const { return next_id_.load(std::memory_order_relaxed); }
+    #endif // TESTING
 
 private:
     class Order { // main data variable
@@ -87,7 +89,10 @@ private:
 
     // run() helper suite
     void handleMatching();
+
+    #if LOGGING
     void exposeTrades();
+    #endif
 
     // matching helpers
     void executeRequest(InboundMessage msg);

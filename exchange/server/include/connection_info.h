@@ -8,7 +8,7 @@
 #include "protocol.h"
 #include "socket.h"
 #include "buffer.h"
-#include "../../include/ring_buffer.hpp"
+#include "ring_buffer.hpp"
 
 #include <algorithm>
 

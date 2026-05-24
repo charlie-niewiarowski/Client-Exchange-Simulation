@@ -63,12 +63,16 @@ int main(const int argc, char* argv[]) {
     const auto s = orch.stats();
     std::fprintf(stderr,
         "\n=== Stats ===\n"
-        "  requests sent : %llu\n"
-        "  responses OK  : %llu\n"
-        "  responses ERR : %llu\n",
+        "  requests sent   : %llu\n"
+        "  ACK responses   : %llu\n"
+        "  MATCH responses : %llu\n"
+        "  ERR responses   : %llu\n"
+        "  orders in flight: %lld\n",
         static_cast<unsigned long long>(s.requests_sent),
-        static_cast<unsigned long long>(s.responses_ok),
-        static_cast<unsigned long long>(s.responses_err));
+        static_cast<unsigned long long>(s.responses_ack),
+        static_cast<unsigned long long>(s.responses_match),
+        static_cast<unsigned long long>(s.responses_err),
+        -1 * static_cast<long long>(s.orders_in_flight));
 
     return 0;
 }

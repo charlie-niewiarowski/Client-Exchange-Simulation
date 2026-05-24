@@ -320,9 +320,11 @@ void ClientOrchestrator::buildAndSend(ClientState& cs) {
 
     cs.write_len = INBOUND_BSIZE;
     cs.write_off = 0;
+    cs.expect_ack = true;   // next OK response is our ACK; subsequent ones are MATCHes
 
     logSend(cs);
     ++cs.requests_sent;
+    ++cs.orders_in_flight;
 
     flushWrite(cs);
 }
@@ -369,18 +371,28 @@ void ClientOrchestrator::consumeResponse(ClientState& cs) {
         OrderId oid{};
         std::memcpy(&oid, buf + OK_HDR + sizeof(ClientId), sizeof(oid));
 
-        logOk(cs, oid);
-        ++cs.responses_ok;
+        // Classify: the first OK after we sent a request is our ACK; every
+        // subsequent OK before the next buildAndSend is an unsolicited MATCH
+        // notification (a resting order of ours was filled by another client).
+        if (cs.expect_ack) {
+            cs.expect_ack = false;
+            --cs.orders_in_flight;   // one request we sent has now been ACK'd
+            logAck(cs, oid);
+            ++cs.responses_ack;
 
-        // Track order IDs assigned to NEW requests for future CANCEL / MODIFY.
-        // We only do this when the last request was a NEW to avoid adding
-        // MATCH / CANCEL echo IDs to the active set prematurely.
-        if (cs.last_kind == OrderFactory::FrameKind::NEW && oid != 0)
-            cs.record_active_order(oid);
+            // Track newly-assigned order IDs so future CANCEL / MODIFY rolls
+            // have real targets.  Only do this for NEW ACKs — MATCH responses
+            // carry the ID of an order already in our active list (now filled),
+            // and CANCEL / MODIFY ACKs echo back an ID we already know.
+            if (cs.last_kind == OrderFactory::FrameKind::NEW && oid != 0)
+                cs.record_active_order(oid);
+        } else {
+            logMatch(cs, oid);
+            ++cs.responses_match;
+        }
 
-        // KEY FIX: advance past exactly OK_TOT bytes, leaving any remaining
-        // bytes (e.g. a coalesced MATCH notification) intact for the next
-        // iteration of the drain loop.
+        // Advance past exactly OK_TOT bytes, leaving any remaining bytes
+        // (coalesced responses) intact for the next drain-loop iteration.
         advance_read_buf(cs, OK_TOT);
 
     } else if (len >= ERR_HDR &&
@@ -391,6 +403,9 @@ void ClientOrchestrator::consumeResponse(ClientState& cs) {
 
         logErr(cs, buf + ERR_HDR, msg_end - ERR_HDR);
         ++cs.responses_err;
+        --cs.orders_in_flight;
+        cs.expect_ack = false;  // clear so any trailing coalesced MATCH is not
+                                // misclassified as a second ACK
 
         advance_read_buf(cs, msg_end + 1); // +1 for the trailing '\n'
 
@@ -401,6 +416,8 @@ void ClientOrchestrator::consumeResponse(ClientState& cs) {
         std::fprintf(stderr,
             "Client %3u: [WARN] unrecognised response frame (%zu bytes)\n",
             cs.client_id, len);
+        --cs.orders_in_flight;
+        cs.expect_ack = false;  // same guard as ERR branch
         advance_read_buf(cs, std::min(len, static_cast<size_t>(OUTBOUND_BSIZE)));
     }
 }
@@ -455,9 +472,11 @@ void ClientOrchestrator::closeClient(ClientState& cs) {
 ClientOrchestrator::Stats ClientOrchestrator::stats() const {
     Stats s{};
     for (const auto& cs : clients_) {
-        s.requests_sent += cs.requests_sent;
-        s.responses_ok  += cs.responses_ok;
-        s.responses_err += cs.responses_err;
+        s.requests_sent   += cs.requests_sent;
+        s.responses_ack   += cs.responses_ack;
+        s.responses_match += cs.responses_match;
+        s.responses_err   += cs.responses_err;
+        s.orders_in_flight += cs.orders_in_flight;
     }
     return s;
 }
@@ -527,11 +546,21 @@ void ClientOrchestrator::logSend(const ClientState& cs) {
 #endif
 }
 
-void ClientOrchestrator::logOk(const ClientState& cs, const OrderId oid) {
+void ClientOrchestrator::logAck(const ClientState& cs, const OrderId oid) {
 #if LOG_ENABLED
     std::fprintf(stderr,
-        "Client %3u: [OK]   %s  order_id=%u\n",
+        "Client %3u: [ACK]  %s  order_id=%u\n",
         cs.client_id, kind_str(cs.last_kind), oid);
+#else
+    (void)cs; (void)oid;
+#endif
+}
+
+void ClientOrchestrator::logMatch(const ClientState& cs, const OrderId oid) {
+#if LOG_ENABLED
+    std::fprintf(stderr,
+        "Client %3u: [MATCH] order_id=%u\n",
+        cs.client_id, oid);
 #else
     (void)cs; (void)oid;
 #endif

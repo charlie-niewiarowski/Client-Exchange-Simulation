@@ -13,11 +13,14 @@
 Exchange::Exchange() : engine_(in_ring_, out_ring_), server_{in_ring_, out_ring_} {}
 
 void Exchange::run() {
-    std::cerr << "exchange/tid: " << gettid() << std::endl;
+    #if DIAGNOSTICS
+        std::cerr << "exchange/tid: " << gettid() << std::endl;
+    #endif
 
     std::jthread server_thread([&]() {
-        pid_t tid = gettid();
-        std::cerr << "server tid: " << tid << std::endl;
+        #if DIAGNOSTICS
+            std::cerr << "server tid: " << gettid() << std::endl;
+        #endif
        server_.run();
     });
 

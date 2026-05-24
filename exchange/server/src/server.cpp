@@ -11,7 +11,6 @@
 #include <iostream>
 #include <fcntl.h>
 #include <filesystem>
-#include <forward_list>
 
 #define ever (;;)
 
@@ -44,6 +43,10 @@ void Server::run() {
     const EpollSocket listen_sock{std::move(socket_setup.value())};
 
     for ever {
+        #if TESTING
+        if (!running_.load(std::memory_order_relaxed)) return;
+        #endif
+
         const int nfds = epoll_wait(epoll_fd_, events_, MAX_CLIENTS, 0);
 
         if (nfds == -1) {

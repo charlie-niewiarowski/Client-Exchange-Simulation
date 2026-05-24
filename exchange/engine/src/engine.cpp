@@ -10,7 +10,6 @@
 #include <thread>
 
 #include "../include/engine.h"
-#include "../config/macros.h"
 
 #define ever (;;)
 
@@ -18,7 +17,9 @@
 // Forward-declared free forms
 //=============================================================================
 
+#if LOGGING
 void write_to_console(const Trade &trade);
+#endif
 
 //=============================================================================
 // Special Member Functions + Their Helpers
@@ -43,8 +44,10 @@ Engine::Engine(InboundRing& in_ring, OutboundRing& out_ring)
 //=============================================================================
 void Engine::run() {
     std::jthread matching_thread([&]() {
+        #if LOGGING
         std::cerr << "matching thread: " << gettid() << std::endl;
-       handleMatching();
+        #endif
+        handleMatching();
     });
 
     cpu_set_t cpuset;
@@ -52,20 +55,24 @@ void Engine::run() {
     CPU_SET(MATCHING_CORE, &cpuset);
     pthread_setaffinity_np(matching_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
 
-    std::jthread io_thread([&]() {
-       exposeTrades();
-    });
+    #if LOGGING
+        std::jthread io_thread([&]() {
+           exposeTrades();
+        });
+    #endif
 }
 
 //=============================================================================
 // step()  — test interface, processes all pending inbound messages once
 //=============================================================================
+#if TESTING
 void Engine::step() {
     InboundMessage msg{};
     while (in_ring_.pop(msg)) {
         executeRequest(msg);
     }
 }
+#endif
 
 //=============================================================================
 // run() Helper Suite
@@ -80,6 +87,7 @@ void Engine::handleMatching() {
     }
 }
 
+#if LOGGING
 void Engine::exposeTrades() {
     Trade trade{};
 
@@ -89,6 +97,7 @@ void Engine::exposeTrades() {
         }
     }
 }
+#endif
 
 //=============================================================================
 // matching helpers
@@ -120,7 +129,9 @@ void Engine::executeRequest(InboundMessage msg) {
             suppress_ack = modifyOrder(msg.order_id, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
             break;
         default:
-            std::cerr << "engine: Inbound message attempted unknown request";
+            #if LOGGING
+            std::cerr << "engine: Inbound message attempted unknown request\n";
+            #endif
             outbound_msg.status = Status::FAILURE;
     }
 
@@ -276,6 +287,7 @@ bool Engine::canMatch(Side side, Price price) const {
 // Forward-declared free form implementations
 //=============================================================================
 
+#if LOGGING
 void write_to_console(const Trade &trade) {
     const TradeInfo& bid{ trade.get_bid_info() };
     const TradeInfo& ask{ trade.get_ask_info() };
@@ -289,3 +301,4 @@ void write_to_console(const Trade &trade) {
                            << " price: " << ask.price
                            << " quantity: " << ask.quantity << "\n\n";
 }
+#endif

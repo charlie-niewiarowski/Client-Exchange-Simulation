@@ -6,8 +6,8 @@
 #define TOYEXCHANGE_ORDERGATEWAY_HPP
 
 #include "connection_info.h"
-#include "../../include/communication_types.h"
-#include "../config/config.h"
+#include "communication_types.h"
+#include "macros.h"
 
 #include <atomic>
 #include <sys/epoll.h>
@@ -36,7 +36,11 @@ public:
      * or handles client connections
     */
     void run();
+
+    // Testing — compiled in only when TESTING is defined in macros.h
+    #if TESTING
     void stop() { running_.store(false, std::memory_order_relaxed); }
+    #endif
 private:
     //===== data structures =====
     std::unordered_map<int, ConnectionInfo> info_map_; // map of file descriptors to important info about connection
@@ -47,7 +51,10 @@ private:
     InboundRing& in_ring_;
     OutboundRing& out_ring_;
 
+    // Testing — only needed when stop() exists
+    #if TESTING
     std::atomic<bool> running_{true};
+    #endif
 
     // epoll data
     int epoll_fd_ = -1;

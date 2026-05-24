@@ -7,7 +7,7 @@
 
 #include "../engine/include/engine.h"
 #include "../server/include/server.h"
-#include "../config/macros.h"
+#include "macros.h"
 
 class Exchange {
 public:

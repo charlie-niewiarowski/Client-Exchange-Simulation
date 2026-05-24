@@ -55,17 +55,22 @@ struct ClientState {
     uint32_t active_size = 0;   // valid entries, capped at MAX_ACTIVE_ORDERS
 
     // ── Last-sent request metadata (for response log attribution) ─────────────
-    OrderFactory::FrameKind last_kind = OrderFactory::FrameKind::NEW;
+    OrderFactory::FrameKind last_kind  = OrderFactory::FrameKind::NEW;
     InboundMessage          last_msg{};
+    // True from the moment a request is sent until its ACK is consumed.
+    // Any OK frame received while this is false is an unsolicited MATCH.
+    bool                    expect_ack = false;
 
     // ── Reconnection ──────────────────────────────────────────────────────────
     uint64_t reconnect_at_ns = 0;
     uint32_t reconnect_count = 0;
 
     // ── Statistics ────────────────────────────────────────────────────────────
-    uint64_t requests_sent = 0;
-    uint64_t responses_ok  = 0;
-    uint64_t responses_err = 0;
+    uint64_t requests_sent   = 0;
+    uint64_t responses_ack   = 0;  // first OK after each sent request
+    uint64_t responses_match = 0;  // unsolicited fill notifications
+    uint64_t responses_err   = 0;
+    int64_t  orders_in_flight = 0; // requests sent but not yet responded to
 
     // ── Per-client RNG ────────────────────────────────────────────────────────
     // Seeded independently from the orchestrator's RNG so every client
