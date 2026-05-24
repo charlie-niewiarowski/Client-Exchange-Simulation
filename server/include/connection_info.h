@@ -31,7 +31,8 @@ public:
     [[nodiscard]] int fd() const { return sock_.get(); }
 
     // buffer functions
-    Buffer& buffer() { return buf_; }
+    Buffer& read_buffer() { return read_buf_; }
+    Buffer& write_buffer() { return write_buf_; }
 
     // outbound queue functions
     void push_outbound(const OutboundMessage& msg) { outbound_.push(msg); }
@@ -47,27 +48,19 @@ public:
     void set_state(ConnectionState s) { state_ = s; }
 
     // error functions
-    [[nodiscard]] bool has_error() const { return error_; }
-    [[nodiscard]] std::string_view error() const { return err_msg_; }
-    void set_error(std::string_view msg);
-    void clear_error() { error_ = false; err_msg_.clear(); }
+    void push_error(ServerError err);
 
 private:
     // data
     const EpollSocket sock_;
-    Buffer buf_;
+    Buffer read_buf_;
+    Buffer write_buf_;
     OutboundQueue outbound_{RINGBUF_SIZE};
     InboundMessage inbound_{};
 
     // state
     ConnectionState state_ = ConnectionState::READING;
-
-    // error
-    bool error_{false};
-    std::string err_msg_;
 };
-
-static_assert(MAX_ERROR_MSG_LEN > 32, "error message capacity unreasonably small");
 
 
 #endif //TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP

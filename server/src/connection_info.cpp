@@ -12,9 +12,6 @@ OutboundMessage ConnectionInfo::pop_outbound() {
     return msg;
 }
 
-void ConnectionInfo::set_error(const std::string_view msg) {
-    assert(msg.length() <= MAX_ERROR_MSG_LEN);
-
-    error_ = true;
-    err_msg_ = msg;
+void ConnectionInfo::push_error(const ServerError err) {
+    push_outbound({.server_error = err});
 }

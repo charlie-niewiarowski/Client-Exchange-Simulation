@@ -229,6 +229,7 @@ CMakeFiles/exchange.dir/app/main.cpp.o: \
  /home/cniew/CLionProjects/ToyExchange/app/../server/include/connection_info.h \
  /home/cniew/CLionProjects/ToyExchange/app/../server/include/protocol.h \
  /home/cniew/CLionProjects/ToyExchange/app/../server/include/../../include/communication_types.h \
+ /usr/include/c++/12/cstring /usr/include/string.h /usr/include/strings.h \
  /home/cniew/CLionProjects/ToyExchange/app/../server/include/socket.h \
  /usr/include/x86_64-linux-gnu/sys/epoll.h \
  /usr/include/x86_64-linux-gnu/bits/epoll.h \

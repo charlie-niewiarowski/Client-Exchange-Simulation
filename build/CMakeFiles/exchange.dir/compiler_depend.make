@@ -281,6 +281,9 @@ CMakeFiles/exchange.dir/app/exchange.cpp.o: /home/cniew/CLionProjects/ToyExchang
   /home/cniew/CLionProjects/ToyExchange/server/include/connection_info.h \
   /home/cniew/CLionProjects/ToyExchange/server/include/protocol.h \
   /home/cniew/CLionProjects/ToyExchange/include/communication_types.h \
+  /usr/include/c++/12/cstring \
+  /usr/include/string.h \
+  /usr/include/strings.h \
   /home/cniew/CLionProjects/ToyExchange/server/include/socket.h \
   /usr/include/x86_64-linux-gnu/sys/epoll.h \
   /usr/include/x86_64-linux-gnu/bits/epoll.h \
@@ -594,6 +597,9 @@ CMakeFiles/exchange.dir/app/main.cpp.o: /home/cniew/CLionProjects/ToyExchange/ap
   /home/cniew/CLionProjects/ToyExchange/server/include/connection_info.h \
   /home/cniew/CLionProjects/ToyExchange/server/include/protocol.h \
   /home/cniew/CLionProjects/ToyExchange/include/communication_types.h \
+  /usr/include/c++/12/cstring \
+  /usr/include/string.h \
+  /usr/include/strings.h \
   /home/cniew/CLionProjects/ToyExchange/server/include/socket.h \
   /usr/include/x86_64-linux-gnu/sys/epoll.h \
   /usr/include/x86_64-linux-gnu/bits/epoll.h \
@@ -1455,6 +1461,9 @@ CMakeFiles/exchange.dir/server/src/connection_info.cpp.o: /home/cniew/CLionProje
   /usr/include/c++/12/pstl/glue_memory_defs.h \
   /usr/include/c++/12/pstl/execution_defs.h \
   /home/cniew/CLionProjects/ToyExchange/include/order_types.h \
+  /usr/include/c++/12/cstring \
+  /usr/include/string.h \
+  /usr/include/strings.h \
   /home/cniew/CLionProjects/ToyExchange/server/include/socket.h \
   /usr/include/x86_64-linux-gnu/sys/epoll.h \
   /usr/include/x86_64-linux-gnu/bits/epoll.h \
@@ -1471,10 +1480,7 @@ CMakeFiles/exchange.dir/server/src/connection_info.cpp.o: /home/cniew/CLionProje
   /usr/include/c++/12/bits/uniform_int_dist.h \
   /usr/include/c++/12/bits/ranges_algo.h \
   /usr/include/c++/12/bits/ranges_util.h \
-  /usr/include/c++/12/pstl/glue_algorithm_defs.h \
-  /usr/include/c++/12/cstring \
-  /usr/include/string.h \
-  /usr/include/strings.h
+  /usr/include/c++/12/pstl/glue_algorithm_defs.h
 
 CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyExchange/server/src/server.cpp \
   /usr/include/stdc-predef.h \
@@ -1727,6 +1733,9 @@ CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyEx
   /usr/include/c++/12/pstl/glue_memory_defs.h \
   /usr/include/c++/12/pstl/execution_defs.h \
   /home/cniew/CLionProjects/ToyExchange/include/order_types.h \
+  /usr/include/c++/12/cstring \
+  /usr/include/string.h \
+  /usr/include/strings.h \
   /home/cniew/CLionProjects/ToyExchange/server/include/socket.h \
   /usr/include/x86_64-linux-gnu/sys/epoll.h \
   /usr/include/x86_64-linux-gnu/bits/epoll.h \
@@ -1749,9 +1758,6 @@ CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyEx
   /usr/include/c++/12/bits/unordered_set.h \
   /usr/include/c++/12/optional \
   /home/cniew/CLionProjects/ToyExchange/server/include/validation.h \
-  /usr/include/c++/12/cstring \
-  /usr/include/string.h \
-  /usr/include/strings.h \
   /usr/include/x86_64-linux-gnu/sys/socket.h \
   /usr/include/x86_64-linux-gnu/bits/types/struct_iovec.h \
   /usr/include/x86_64-linux-gnu/bits/socket.h \
@@ -1807,7 +1813,10 @@ CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyEx
   /usr/include/c++/12/bits/sstream.tcc \
   /usr/include/c++/12/codecvt \
   /usr/include/c++/12/bits/fs_dir.h \
-  /usr/include/c++/12/bits/fs_ops.h
+  /usr/include/c++/12/bits/fs_ops.h \
+  /usr/include/c++/12/forward_list \
+  /usr/include/c++/12/bits/forward_list.h \
+  /usr/include/c++/12/bits/forward_list.tcc
 
 
 /usr/include/c++/12/bits/fs_dir.h:
@@ -1859,10 +1868,6 @@ CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyEx
 /usr/include/x86_64-linux-gnu/bits/types/struct_iovec.h:
 
 /usr/include/x86_64-linux-gnu/sys/socket.h:
-
-/usr/include/strings.h:
-
-/usr/include/string.h:
 
 /home/cniew/CLionProjects/ToyExchange/server/src/buffer.cpp:
 
@@ -1956,6 +1961,12 @@ CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyEx
 
 /home/cniew/CLionProjects/ToyExchange/server/include/socket.h:
 
+/usr/include/c++/12/bits/forward_list.tcc:
+
+/usr/include/strings.h:
+
+/usr/include/string.h:
+
 /home/cniew/CLionProjects/ToyExchange/server/include/connection_info.h:
 
 /home/cniew/CLionProjects/ToyExchange/server/include/server.h:
@@ -2047,6 +2058,8 @@ CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyEx
 /usr/include/c++/12/bits/ranges_cmp.h:
 
 /usr/include/c++/12/bits/locale_facets.tcc:
+
+/usr/include/c++/12/bits/forward_list.h:
 
 /usr/include/x86_64-linux-gnu/bits/endianness.h:
 
@@ -2525,6 +2538,8 @@ CMakeFiles/exchange.dir/server/src/server.cpp.o: /home/cniew/CLionProjects/ToyEx
 /usr/include/x86_64-linux-gnu/gnu/stubs.h:
 
 /usr/include/c++/12/vector:
+
+/usr/include/c++/12/forward_list:
 
 /usr/include/c++/12/bits/streambuf_iterator.h:
 

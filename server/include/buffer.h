@@ -15,22 +15,21 @@ public:
     Buffer() = default;
 
     // data access
-    [[nodiscard]] std::string_view view() const { return {data_, len_}; }
     [[nodiscard]] size_t length() const { return len_; }
     [[nodiscard]] size_t bytes_written() const { return bytes_written_; }
     [[nodiscard]] size_t remaining_capacity() const { return BUFFER_SIZE - len_; }
 
-    // read/write wrappers
-    ssize_t read_from(int fd);
-    ssize_t write_to(int fd);
+    // reading and writing
+    ssize_t read_from(int fd); // used to read from a sock
+    [[nodiscard]] std::string_view view() const { return {data_, len_}; } // used for parsing
+	void fill(const char *src, size_t n); // used for serialization
+    ssize_t write_to(int fd); // used for writing
 
-    // utility state change
-    void overwrite(size_t start, const char *src);
-    void overwrite(size_t start, const char *src, size_t len);
+	// util
     void clear() { len_ = 0; bytes_written_ = 0; }
 
 private:
-    char data_[BUFFER_SIZE];
+    char data_[BUFFER_SIZE]{};
     size_t len_ = 0;
     size_t bytes_written_ = 0;
 };

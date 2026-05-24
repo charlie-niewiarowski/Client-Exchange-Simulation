@@ -51,31 +51,33 @@ private:
 
     // epoll data
     int epoll_fd_ = -1;
-    epoll_event events_[MAX_CLIENTS];
+    epoll_event events_[MAX_CLIENTS]{};
 
     std::unordered_set<int> writable_fds_;
 
-    //===== run() helpers =====
-    std::optional<EpollSocket> setupListenSocket();
+    //===== setup =====
+    std::optional<EpollSocket> setupListenSocket() const;
     bool setupEpoll();
 
+    //===== loop body =====
     std::optional<int> registerConnection(int listen_fd);
-    void handleRequests(int client_fd);
-    void finishBlockedWrites(int client_fd);
+    void readAndProcessBytes(int client_fd);
+    void finishSend(int client_fd);
 
-    void drainOutboundRing();
-    void handleResponses();
+    void routeOutboundMessages();
+    void beginSends();
 
     //===== read pipeline helpers =====
     void readRequest(ConnectionInfo &info);
-    void parseRequest(ConnectionInfo& info);
-    void executeRequest(ConnectionInfo& info);
+    void processRequest(ConnectionInfo& info);
 
     //===== write pipeline helpers =====
-    void serializeResponse(ConnectionInfo &info);
+    static void serializeResponse(ConnectionInfo &info);
     void sendResponse(ConnectionInfo& info);
+    void finishResponseCycle(ConnectionInfo& info) const;
+
+    //===== ubiquitous helpers =====
     void closeConnection(int client_fd);
-    void finishResponseCycle(ConnectionInfo& info);
 };
 
 #endif //TOYEXCHANGE_ORDERGATEWAY_HPP
