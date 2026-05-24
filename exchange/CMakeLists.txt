@@ -12,7 +12,8 @@ target_include_directories(common_lib INTERFACE
 target_include_directories(config INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/config)
 
-add_executable(exchange app/main.cpp
+set(EXCHANGE_SOURCES
+        app/main.cpp
         app/exchange.cpp
 
         engine/src/engine.cpp
@@ -22,5 +23,26 @@ add_executable(exchange app/main.cpp
         server/src/server.cpp
 )
 
-target_link_libraries(exchange PUBLIC common_lib)
-target_link_libraries(exchange PUBLIC config)
+# Release build
+# Optimised; debug symbols and frame pointers kept for perf / profiling
+add_executable(server-release ${EXCHANGE_SOURCES})
+target_link_libraries(server-release PUBLIC common_lib config)
+target_compile_options(server-release PRIVATE
+        -O2
+        -g
+        -fno-omit-frame-pointer
+)
+
+# Debug build
+# No optimisation; full debug info, assertions enabled
+add_executable(server-debug ${EXCHANGE_SOURCES})
+target_link_libraries(server-debug PUBLIC common_lib config)
+target_compile_options(server-debug PRIVATE
+        -O0
+        -g3
+        -fno-omit-frame-pointer
+        -fsanitize=address,undefined
+)
+target_link_options(server-debug PRIVATE
+        -fsanitize=address,undefined
+)

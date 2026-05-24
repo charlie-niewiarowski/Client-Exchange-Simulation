@@ -44,8 +44,8 @@ Engine::Engine(InboundRing& in_ring, OutboundRing& out_ring)
 //=============================================================================
 void Engine::run() {
     std::jthread matching_thread([&]() {
-        #if LOGGING
-        std::cerr << "matching thread: " << gettid() << std::endl;
+        #if DIAGNOSTICS
+        std::cerr << "matching tid: " << gettid() << std::endl;
         #endif
         handleMatching();
     });
@@ -79,10 +79,20 @@ void Engine::step() {
 //=============================================================================
 void Engine::handleMatching() {
     InboundMessage msg{};
+    int spins{};
 
     for ever {
-        while (in_ring_.pop(msg)) {
+        if (in_ring_.pop(msg)) {
+            spins = 0;
             executeRequest(msg);
+        }
+        else {
+            if (++spins > 1000) {
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+            }
+            else if (spins > 100) {
+                std::this_thread::yield();
+            }
         }
     }
 }

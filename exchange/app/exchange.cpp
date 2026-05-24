@@ -14,7 +14,7 @@ Exchange::Exchange() : engine_(in_ring_, out_ring_), server_{in_ring_, out_ring_
 
 void Exchange::run() {
     #if DIAGNOSTICS
-        std::cerr << "exchange/tid: " << gettid() << std::endl;
+        std::cerr << "exchange tid: " << gettid() << std::endl;
     #endif
 
     std::jthread server_thread([&]() {

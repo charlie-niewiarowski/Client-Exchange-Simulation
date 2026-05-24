@@ -10,7 +10,7 @@
 
 #define SERVER_CORE 2
 
-#define LOGGING 0
+#define LOGGING1
 #define DIAGNOSTICS 0
 #define TESTING 0
 

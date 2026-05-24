@@ -5,15 +5,16 @@
 #ifndef TOYEXCHANGE_ORDERGATEWAY_HPP
 #define TOYEXCHANGE_ORDERGATEWAY_HPP
 
+#include <array>
+
 #include "connection_info.h"
 #include "communication_types.h"
 #include "macros.h"
 
-#include <atomic>
 #include <sys/epoll.h>
 #include <unordered_set>
 #include <optional>
-
+#include <unordered_map>
 
 
 class Server {
@@ -43,7 +44,7 @@ public:
     #endif
 private:
     //===== data structures =====
-    std::unordered_map<int, ConnectionInfo> info_map_; // map of file descriptors to important info about connection
+    std::array<std::optional<ConnectionInfo>, MAX_CLIENTS + 10> info_map_{}; // map of file descriptors to important info about connection
                                                        // this data structure owns the ConnectionInfo
     std::unordered_map<ClientId, ConnectionInfo*> client_map_; // map of ClientIds to ConnectionInfo* for routing
                                                               // uses pointers because lack of ownership

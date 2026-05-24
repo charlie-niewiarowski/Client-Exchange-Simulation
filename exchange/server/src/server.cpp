@@ -47,7 +47,7 @@ void Server::run() {
         if (!running_.load(std::memory_order_relaxed)) return;
         #endif
 
-        const int nfds = epoll_wait(epoll_fd_, events_, MAX_CLIENTS, 0);
+        const int nfds = epoll_wait(epoll_fd_, events_, MAX_CLIENTS, 1);
 
         if (nfds == -1) {
             if (errno == EINTR) continue;
@@ -63,7 +63,7 @@ void Server::run() {
                 continue;
             }
 
-            const ConnectionInfo& info{info_map_.at(fd)};
+            const ConnectionInfo& info{*info_map_[fd]};
             if (info.state() == ConnectionState::READING && events_[i].events & EPOLLIN) {
                 readAndProcessBytes(fd);
             }
@@ -161,15 +161,18 @@ std::optional<int> Server::registerConnection(const int listen_fd) {
         return std::nullopt;
     }
 
-    info_map_.emplace(client_fd, std::move(client_sock));
+    info_map_[client_fd].emplace(std::move(client_sock));
 
     return client_fd;
 }
 
 void Server::readAndProcessBytes(const int client_fd) {
-    ConnectionInfo& info{info_map_.at(client_fd)};
+    if (!info_map_[client_fd].has_value()) return;
+    readRequest(*info_map_[client_fd]);
 
-    readRequest(info);
+    // readRequest may have called closeConnection (EOF / error), resetting the optional
+    if (!info_map_[client_fd].has_value()) return;
+    ConnectionInfo& info{*info_map_[client_fd]};
     if (info.state() != ConnectionState::PROCESSING) return;
 
     processRequest(info);
@@ -179,7 +182,8 @@ void Server::readAndProcessBytes(const int client_fd) {
 // actually does; this doesn't just send responses, it specifically tries to finish
 // writes that either did not happen or partially happened.
 void Server::finishSend(const int client_fd) {
-    sendResponse(info_map_.at(client_fd));
+    if (!info_map_[client_fd].has_value()) return;
+    sendResponse(*info_map_[client_fd]);
 }
 
 void Server::routeOutboundMessages() {
@@ -199,11 +203,11 @@ void Server::beginSends() {
     for (auto it{writable_fds_.begin()}; it != writable_fds_.end(); ) {
         const int fd{*it};
 
-        ConnectionInfo& info{info_map_.at(fd)};
+        ConnectionInfo& info{*info_map_[fd]};
         serializeResponse(info);
         sendResponse(info);
 
-        if (!info_map_.contains(fd) || !info.has_pending_outbound()) {
+        if (!info_map_[fd].has_value() || !info.has_pending_outbound()) {
             it = writable_fds_.erase(it);
         }
         else {
@@ -267,7 +271,7 @@ void Server::processRequest(ConnectionInfo &info) {
     }
 
     info.set_inbound(msg);
-    client_map_[msg.client_id] = &info_map_.at(info.fd());
+    client_map_[msg.client_id] = &(*info_map_[info.fd()]);
 
     while (!in_ring_.push(info.inbound())) {}
     info.set_state(ConnectionState::SERIALIZING);
@@ -333,13 +337,11 @@ void Server::finishResponseCycle(ConnectionInfo& info) const {
 //=============================================================================
 
 void Server::closeConnection(const int client_fd) {
-    const auto it{info_map_.find(client_fd)};
-    if (it == info_map_.end()) return;
+    if (!info_map_[client_fd].has_value()) return;
+    client_map_.erase(info_map_[client_fd]->inbound().client_id);
 
-    client_map_.erase(it->second.inbound().client_id);
-
-    // erasing destructs ConnectionInfo -> destructs EpollSocket -> calls EPOLL_CTL_DEL then close(fd)
-    info_map_.erase(it);
+    // resetting optional destructs ConnectionInfo -> destructs EpollSocket -> calls EPOLL_CTL_DEL then close(fd)
+    info_map_[client_fd].reset();
 }
 
 static int epoll_ctrl(const int epoll_fd, const int fd, const int op, const int target) {
