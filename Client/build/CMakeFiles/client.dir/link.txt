@@ -1,0 +1,1 @@
+/usr/bin/c++ -g CMakeFiles/client.dir/app/main.cpp.o CMakeFiles/client.dir/src/orchestrator.cpp.o -o client 

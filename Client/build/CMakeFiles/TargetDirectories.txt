@@ -1,0 +1,3 @@
+/home/cniew/CLionProjects/ClientExchangeSim/Client/build/CMakeFiles/client.dir
+/home/cniew/CLionProjects/ClientExchangeSim/Client/build/CMakeFiles/edit_cache.dir
+/home/cniew/CLionProjects/ClientExchangeSim/Client/build/CMakeFiles/rebuild_cache.dir
