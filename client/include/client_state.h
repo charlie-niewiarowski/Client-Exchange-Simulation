@@ -1,0 +1,95 @@
+//
+// Created by cniew on 5/24/26.
+//
+// Per-connection state for a single simulated client.
+//
+// Lifecycle
+// ─────────
+//  CONNECTING  non-blocking connect() issued; waiting for EPOLLOUT to confirm
+//  SENDING     request frame partially written; waiting for EPOLLOUT to drain
+//  AWAITING    full frame sent; waiting for EPOLLIN response from the exchange
+//  RECONNECT   connection lost; a reconnect attempt is scheduled for
+//              reconnect_at_ns (monotonic clock nanoseconds)
+//
+
+#ifndef CLIENT_STATE_H
+#define CLIENT_STATE_H
+
+#include "communication_types.h"
+#include "protocol.h"
+#include "order_factory.h"
+#include "../config/config.h"
+
+#include <array>
+#include <cstdint>
+#include <random>
+
+enum class ClientPhase : uint8_t {
+    CONNECTING,
+    SENDING,
+    AWAITING,
+    RECONNECT,
+};
+
+struct ClientState {
+    // ── Identity ──────────────────────────────────────────────────────────────
+    uint32_t  client_id  = 0;
+    int       fd         = -1;
+    ClientPhase phase    = ClientPhase::RECONNECT; // starts "pending connect"
+
+    // ── Write buffer (outbound request) ───────────────────────────────────────
+    char   write_buf[INBOUND_BSIZE]{};
+    size_t write_len = 0;  // bytes to send
+    size_t write_off = 0;  // bytes already sent
+
+    // ── Read buffer (inbound response) ────────────────────────────────────────
+    // Sized to OUTBOUND_BSIZE (64 bytes) so a single recv() always fits one
+    // complete response.  If the exchange sends multiple MATCH responses before
+    // our next request they accumulate here; we drain one per EPOLLIN firing.
+    char   read_buf[OUTBOUND_BSIZE]{};
+    size_t read_len = 0;
+
+    // ── Active order ID ring (for CANCEL / MODIFY targeting) ─────────────────
+    std::array<OrderId, MAX_ACTIVE_ORDERS> active_orders{};
+    uint32_t active_head  = 0;  // next write position (wraps)
+    uint32_t active_size  = 0;  // valid entries, capped at MAX_ACTIVE_ORDERS
+
+    // ── Last-sent metadata (for response logging) ─────────────────────────────
+    OrderFactory::FrameKind last_kind    = OrderFactory::FrameKind::NEW;
+    InboundMessage          last_msg{};  // populated for NEW/CANCEL/MODIFY
+
+    // ── Reconnection ──────────────────────────────────────────────────────────
+    uint64_t reconnect_at_ns = 0;   // monotonic ns; 0 means "reconnect now"
+    uint32_t reconnect_count = 0;
+
+    // ── Statistics ────────────────────────────────────────────────────────────
+    uint64_t requests_sent   = 0;
+    uint64_t responses_ok    = 0;
+    uint64_t responses_err   = 0;
+
+    // ── Per-client RNG ────────────────────────────────────────────────────────
+    // Each client owns its own engine seeded from the orchestrator's RNG so that
+    // clients generate independent order streams (no shared mutable state).
+    std::mt19937 rng;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    void record_active_order(const OrderId oid) {
+        active_orders[active_head % MAX_ACTIVE_ORDERS] = oid;
+        ++active_head;
+        if (active_size < MAX_ACTIVE_ORDERS) ++active_size;
+    }
+
+    // Returns 0 if no orders are tracked (CANCEL/MODIFY will use a junk ID).
+    [[nodiscard]] OrderId pick_active_order() {
+        if (active_size == 0) return 0;
+        std::uniform_int_distribution<uint32_t> pick{0, active_size - 1};
+        // Ring entries live in [active_head - active_size, active_head)
+        const uint32_t slot = (active_head - active_size + pick(rng)) % MAX_ACTIVE_ORDERS;
+        return active_orders[slot];
+    }
+};
+
+#endif // CLIENT_STATE_H
