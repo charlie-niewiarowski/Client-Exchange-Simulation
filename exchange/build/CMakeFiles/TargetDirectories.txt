@@ -1,4 +1,0 @@
-/home/cniew/CLionProjects/ClientExchangeSim/exchange/build/CMakeFiles/common_lib.dir
-/home/cniew/CLionProjects/ClientExchangeSim/exchange/build/CMakeFiles/exchange.dir
-/home/cniew/CLionProjects/ClientExchangeSim/exchange/build/CMakeFiles/edit_cache.dir
-/home/cniew/CLionProjects/ClientExchangeSim/exchange/build/CMakeFiles/rebuild_cache.dir
