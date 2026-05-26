@@ -9,19 +9,32 @@
 //   num_clients  – concurrent TCP connections to open (default: 10)
 //   rng_seed     – optional RNG seed for reproducibility (default: random)
 //
-// Runs until SIGINT / SIGTERM, then prints aggregate stats.
+// Runs until SIGINT / SIGTERM, then prints aggregate stats and throughput.
 //
 
-#include "../include/orchestrator.h"
+#include "../include/load_generator.h"
 
 #include <csignal>
 #include <cstdio>
-#include <cstdlib>
+#include <ctime>
+#include <cerrno>
+#include <cstring>
+#include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
 
-static ClientOrchestrator* g_orch = nullptr;
+static LoadGenerator* g_orch = nullptr;
 
 static void on_signal(int) {
     if (g_orch) g_orch->stop();
+}
+
+// Returns monotonic time in nanoseconds.
+static uint64_t now_ns() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL
+         + static_cast<uint64_t>(ts.tv_nsec);
 }
 
 int main(const int argc, char* argv[]) {
@@ -39,15 +52,22 @@ int main(const int argc, char* argv[]) {
         rng_seed = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
     }
 
+    // Pre-format the rate cap once; used in both the startup banner and stats.
+    char cap_str[32] = "unlimited";
+    if constexpr (EXPECTED_THROUGHPUT > 0)
+        std::snprintf(cap_str, sizeof(cap_str), "%u", static_cast<unsigned>(EXPECTED_THROUGHPUT));
+
     std::fprintf(stderr,
         "=== Exchange load generator ===\n"
         "  clients : %d\n"
         "  seed    : %u\n"
         "  target  : %s:%d\n"
+        "  cap     : %s orders/s\n"
         "  logging : %s\n"
         "Ctrl-C to stop.\n\n",
         num_clients, rng_seed,
         EXCHANGE_HOST, EXCHANGE_PORT,
+        cap_str,
         LOG_ENABLED ? "ON" : "OFF");
 
     struct sigaction sa{};
@@ -55,24 +75,60 @@ int main(const int argc, char* argv[]) {
     sigaction(SIGINT,  &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    ClientOrchestrator orch{num_clients, rng_seed};
+    LoadGenerator orch{num_clients, rng_seed};
     g_orch = &orch;
 
+    // Pin the event-loop thread to CLIENT_CORE.
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(CLIENT_CORE, &cpuset);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0)
+        std::fprintf(stderr, "[WARN] pthread_setaffinity_np: %s\n", std::strerror(errno));
+
+    #if DIAGNOSTICS
+        std::fprintf(stderr, "client tid: %d\n", static_cast<int>(gettid()));
+    #endif
+
+    const uint64_t t0 = now_ns();
     orch.run();
+    const uint64_t t1 = now_ns();
+
+    const double elapsed_s = static_cast<double>(t1 - t0) / 1e9;
 
     const auto s = orch.stats();
+    // MATCHs not included because i care about the number of orders responded to not the number of responses in total
+    const uint64_t total_responses = s.responses_ack + s.responses_err;
+
+    // Guard against divide-by-zero if the user stops immediately.
+    const double inv = elapsed_s > 0.0 ? 1.0 / elapsed_s : 0.0;
+
     std::fprintf(stderr,
         "\n=== Stats ===\n"
+        "  elapsed         : %.3f s\n"
         "  requests sent   : %llu\n"
         "  ACK responses   : %llu\n"
         "  MATCH responses : %llu\n"
         "  ERR responses   : %llu\n"
-        "  orders in flight: %lld\n",
+        "  orders in flight: %lld\n"
+        "  --- throughput ---\n"
+        "  requests/s      : %.0f\n"
+        "  ACK/s           : %.0f\n"
+        "  MATCH/s         : %.0f\n"
+        "  ERR/s           : %.0f\n"
+        "  total resp/s    : %.0f\n"
+        "  target (config) : %s\n",
+        elapsed_s,
         static_cast<unsigned long long>(s.requests_sent),
         static_cast<unsigned long long>(s.responses_ack),
         static_cast<unsigned long long>(s.responses_match),
         static_cast<unsigned long long>(s.responses_err),
-        -1 * static_cast<long long>(s.orders_in_flight));
+        -1LL * static_cast<long long>(s.orders_in_flight),
+        static_cast<double>(s.requests_sent)   * inv,
+        static_cast<double>(s.responses_ack)   * inv,
+        static_cast<double>(s.responses_match) * inv,
+        static_cast<double>(s.responses_err)   * inv,
+        static_cast<double>(total_responses)   * inv,
+        cap_str);
 
     return 0;
 }

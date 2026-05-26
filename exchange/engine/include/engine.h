@@ -15,12 +15,12 @@
 #include "order_request.h"
 #include "ring_buffer.hpp"
 #include "communication_types.h"
-#include "macros.h"
+#include "config.h"
 
 class Engine {
 
 public:
-    Engine(InboundRing& in_ring, OutboundRing& out_ring);
+    Engine(InboundRing& in_ring, OutboundRing& out_ring, std::atomic<bool>& stop);
 
     Engine(const Engine& other) = delete;
     Engine& operator=(const Engine& rhs) = delete;
@@ -54,7 +54,7 @@ public:
 private:
     class Order { // main data variable
     public:
-        Order(OrderId id, OrderRequest order_request);
+        Order(OrderId id, const OrderRequest &order_request);
 
         bool is_filled() const { return remaining_quantity_ == 0; }
         void fill(Quantity quantity) {
@@ -67,14 +67,18 @@ private:
 
         friend class Engine;
     private:
-        ClientId client_id_;
-        OrderId id_;
-        Side side_;
-        OrderType order_type_;
-        Price price_;
-        Quantity initial_quantity_;
-        Quantity remaining_quantity_;
-    };
+        Timestamp recv_tsc;           // 8 bytes  @ 0
+        Timestamp engine_in_tsc;      // 8 bytes  @ 8
+
+        OrderId id_;                  // 8 bytes  @ 16
+        ClientId client_id_;          // 4 bytes  @ 24
+        Price price_;                 // 4 bytes  @ 28
+        Quantity initial_quantity_;   // 4 bytes  @ 32
+        Quantity remaining_quantity_; // 4 bytes  @ 36
+        Side side_;                   // 1 byte   @ 40
+        OrderType order_type_;        // 1 byte   @ 41
+        uint8_t padding[2];           // 2 bytes  @ 42
+    }; // 44 bytes (sizeof verified by compiler)
     using OrderMap = std::unordered_map<OrderId, Order>;
 
     BidLevels bids_;
@@ -86,6 +90,8 @@ private:
     OutboundRing& out_ring_;
 
     RingBuffer<Trade> trades_ring_{TRADE_RING_COUNT};
+
+    std::atomic<bool>& stop_;
 
     // run() helper suite
     void handleMatching();

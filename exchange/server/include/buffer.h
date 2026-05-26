@@ -26,7 +26,8 @@ public:
     ssize_t write_to(int fd); // used for writing
 
 	// util
-    void clear() { len_ = 0; bytes_written_ = 0; }
+    void clear()               { len_ = 0; bytes_written_ = 0; }
+    void advance(size_t n);    // discard n bytes from the front, shift remainder left
 
 private:
     char data_[BUFFER_SIZE]{};

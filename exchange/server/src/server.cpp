@@ -3,14 +3,19 @@
 //
 
 #include "../include/server.h"
+#include "../include/latency.h"
 #include "../include/validation.h"
 
 #include <cstring>
+#include <immintrin.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <iostream>
 #include <fcntl.h>
 #include <filesystem>
+
+// Destructs at program exit, printing latency percentiles to stdout.
+static LatencyHandler latency_handler;
 
 #define ever (;;)
 
@@ -24,8 +29,8 @@ static int epoll_ctrl(int epoll_fd, int fd, int op, int target);
 // Special Member Functions
 //=============================================================================
 
-Server::Server(InboundRing& in, OutboundRing& out)
-    : in_ring_(in), out_ring_(out) {}
+Server::Server(InboundRing& in, OutboundRing& out, std::atomic<bool>& stop)
+    : in_ring_(in), out_ring_(out), stop_(stop) {}
 
 Server::~Server() {
     if (epoll_fd_ != -1) close(epoll_fd_);
@@ -42,7 +47,7 @@ void Server::run() {
     if (!socket_setup.has_value()) return;
     const EpollSocket listen_sock{std::move(socket_setup.value())};
 
-    for ever {
+    while (!stop_.load(std::memory_order_relaxed)) {
         #if TESTING
         if (!running_.load(std::memory_order_relaxed)) return;
         #endif
@@ -244,6 +249,8 @@ void Server::readRequest(ConnectionInfo& info) {
 }
 
 void Server::processRequest(ConnectionInfo &info) {
+    const Timestamp t1 = __rdtsc(); // t1: server has fully read the request
+
     Buffer& buf{info.read_buffer()};
     const char* data{buf.view().data()};
 
@@ -254,13 +261,16 @@ void Server::processRequest(ConnectionInfo &info) {
         info.set_state(ConnectionState::SERIALIZING);
         writable_fds_.insert(info.fd());
 
-        buf.clear();
+        // Advance past exactly one frame so subsequent pipelined frames stay intact.
+        buf.advance(INBOUND_BSIZE);
         return;
     }
 
     InboundMessage msg{};
     memcpy(&msg, data + header_len, sizeof(InboundMessage));
-    buf.clear();
+    msg.recv_tsc = t1; // stamp t1 into the message so it flows through the engine
+    // Advance (not clear) so any bytes from the next pipelined frame are retained.
+    buf.advance(INBOUND_BSIZE);
 
     if (!validate_message(msg)) {
         info.push_error(ServerError::INVALID_ORDER);
@@ -283,6 +293,13 @@ void Server::processRequest(ConnectionInfo &info) {
 
 void Server::serializeResponse(ConnectionInfo &info) {
     const OutboundMessage msg{info.pop_outbound()};
+
+    // Preserve t1/t2/t3 so sendResponse can complete the LatencySample with t4.
+    // recv_tsc == 0 means this is an error response that never reached the engine.
+    if (msg.recv_tsc != 0) {
+        info.set_pending_timestamps(msg.recv_tsc, msg.engine_in_tsc, msg.engine_out_tsc);
+    }
+
     const ServerError err{msg.server_error};
 
     char buf_contents[OUTBOUND_BSIZE];
@@ -311,8 +328,21 @@ void Server::serializeResponse(ConnectionInfo &info) {
 
 void Server::sendResponse(ConnectionInfo& info) {
     Buffer& buf = info.write_buffer();
-
     const int client_fd = info.fd();
+
+    // buf.bytes_written() == 0 means this is the first write attempt (not a retry after EAGAIN).
+    // Only push one sample per response cycle.
+    if (buf.bytes_written() == 0 && info.has_pending_latency()) {
+        const Timestamp t4 = __rdtsc(); // t4: just before writing to the client socket
+        latency_handler.push_sample({
+            info.pending_t1(),
+            info.pending_t2(),
+            info.pending_t3(),
+            t4
+        });
+        info.clear_pending_latency();
+    }
+
     const ssize_t n = buf.write_to(client_fd);
 
     if (buf.bytes_written() == buf.length()) {
@@ -346,7 +376,7 @@ void Server::closeConnection(const int client_fd) {
 
 static int epoll_ctrl(const int epoll_fd, const int fd, const int op, const int target) {
     epoll_event ev{};
-    ev.events = target;
+    ev.events = target | EPOLLET;
     ev.data.fd = fd;
 
     if (epoll_ctl(epoll_fd, op, fd, &ev) == -1) {

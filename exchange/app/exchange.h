@@ -7,18 +7,20 @@
 
 #include "../engine/include/engine.h"
 #include "../server/include/server.h"
-#include "macros.h"
+#include "config.h"
 
 class Exchange {
 public:
     Exchange();
     void run();
+    static void stop(int sig);
 private:
     InboundRing in_ring_{COMMUNICATION_RING_COUNT};
     OutboundRing out_ring_{COMMUNICATION_RING_COUNT};
 
     Engine engine_;
     Server server_;
+    static std::atomic<bool> stop_;
 };
 
 

@@ -50,6 +50,18 @@ public:
     // error functions
     void push_error(ServerError err);
 
+    // latency: serializeResponse stores t1/t2/t3 from the outbound message here;
+    // sendResponse completes the sample with t4 before writing to the socket.
+    void set_pending_timestamps(Timestamp t1, Timestamp t2, Timestamp t3) {
+        pending_t1_ = t1; pending_t2_ = t2; pending_t3_ = t3;
+        has_pending_latency_ = true;
+    }
+    [[nodiscard]] bool      has_pending_latency() const { return has_pending_latency_; }
+    [[nodiscard]] Timestamp pending_t1()          const { return pending_t1_; }
+    [[nodiscard]] Timestamp pending_t2()          const { return pending_t2_; }
+    [[nodiscard]] Timestamp pending_t3()          const { return pending_t3_; }
+    void clear_pending_latency() { has_pending_latency_ = false; }
+
 private:
     // data
     const EpollSocket sock_;
@@ -60,6 +72,12 @@ private:
 
     // state
     ConnectionState state_ = ConnectionState::READING;
+
+    // pending latency timestamps (t1/t2/t3 from the outbound message; t4 added in sendResponse)
+    Timestamp pending_t1_{};
+    Timestamp pending_t2_{};
+    Timestamp pending_t3_{};
+    bool has_pending_latency_{false};
 };
 
 

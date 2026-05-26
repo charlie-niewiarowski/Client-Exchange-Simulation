@@ -14,27 +14,36 @@
 enum class MessageType : uint8_t { NEW = 0, CANCEL = 1, MODIFY = 2, MATCH = 4};
 
 struct InboundMessage { // gateway -> engine
-    ClientId client_id;       // 4 bytes
-    OrderId order_id;         // 4 bytes   |   junk value for NEW
-    Price price;              // 4 bytes
-    Quantity quantity;        // 4 bytes
-    MessageType message_type; // 1 byte
-    Side side;                // 1 byte
-    OrderType order_type;     // 1 byte
-    uint8_t padding;          // 1 byte
-}; // 20 bytes
+    Timestamp recv_tsc;       // 8 bytes  @ 0
+    Timestamp engine_in_tsc;  // 8 bytes  @ 8
+
+    ClientId client_id;       // 4 bytes  @ 16
+    // 4 bytes implicit padding (align OrderId to 8)
+    OrderId order_id;         // 8 bytes  @ 24  |  junk value for NEW
+    Price price;              // 4 bytes  @ 32
+    Quantity quantity;        // 4 bytes  @ 36
+    MessageType message_type; // 1 byte   @ 40
+    Side side;                // 1 byte   @ 41
+    OrderType order_type;     // 1 byte   @ 42
+    uint8_t padding[5];       // 5 bytes  @ 43
+}; // 48 bytes (sizeof verified by compiler)
 
 enum class Status : uint8_t { FAILURE = 0, SUCCESS = 1};
 enum class ServerError : uint8_t { NONE = 0, MALFORMED_REQUEST, INVALID_ORDER, SYSTEM_ERROR, EXECUTION_ERROR };
 
 struct OutboundMessage { // engine -> gateway
-    ClientId client_id;       // 4 bytes
-    OrderId order_id;         // 4 bytes
-    MessageType message_type; // 1 byte
-    Status status;            // 1 byte
-    ServerError server_error; // 1 byte
-    uint8_t padding;          // 1 byte
-}; // 12 bytes
+    Timestamp recv_tsc;       // 8 bytes  @ 0
+    Timestamp engine_in_tsc;  // 8 bytes  @ 8
+    Timestamp engine_out_tsc; // 8 bytes  @ 16
+
+    ClientId client_id;       // 4 bytes  @ 24
+    // 4 bytes implicit padding (align OrderId to 8)
+    OrderId order_id;         // 8 bytes  @ 32
+    MessageType message_type; // 1 byte   @ 40
+    Status status;            // 1 byte   @ 41
+    ServerError server_error; // 1 byte   @ 42
+    uint8_t padding[5];       // 5 bytes  @ 43
+}; // 48 bytes (sizeof verified by compiler)
 
 using ClientMessageMap = std::unordered_map<ClientId, std::vector<OutboundMessage>>;
 

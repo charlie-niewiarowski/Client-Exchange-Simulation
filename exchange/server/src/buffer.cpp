@@ -20,6 +20,12 @@ void Buffer::fill(const char *src, const size_t n) {
     len_ = n;
 }
 
+void Buffer::advance(const size_t n) {
+    if (n >= len_) { len_ = 0; return; }
+    std::memmove(data_, data_ + n, len_ - n);
+    len_ -= n;
+}
+
 ssize_t Buffer::write_to(const int fd) {
     ssize_t n = send(fd, data_ + bytes_written_, len_ - bytes_written_, MSG_NOSIGNAL);
     if (n > 0) bytes_written_ += static_cast<size_t>(n);

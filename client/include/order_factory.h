@@ -1,20 +1,19 @@
 //
 // Created by cniew on 5/24/26.
 //
-// Header-only factory: builds randomised outbound wire frames.
+// Header-only factory
 //
 // Probability table (uniform roll over [0, 99]):
-//   roll > 40  (59 / 100)  → NEW    order
-//   roll > 15  (25 / 100)  → CANCEL order
-//   roll >  5  (10 / 100)  → MODIFY order
-//   roll <= 5  ( 6 / 100)  → INVALID / MALFORMED
+//   roll > 40  (59 / 100)  -> NEW    order
+//   roll > 15  (25 / 100)  -> CANCEL order
+//   roll >  5  (10 / 100)  -> MODIFY order
+//   roll <= 5  ( 6 / 100)  -> INVALID / MALFORMED
 //
 // Every frame is exactly INBOUND_BSIZE bytes:
 //   "EXCHANGE\n"   (9 bytes)
 //   InboundMessage (20 bytes)
 //   '\n'           ( 1 byte)
-//  ─────────────────────────  30 bytes total
-//
+// 30 bytes total
 
 #ifndef ORDER_FACTORY_H
 #define ORDER_FACTORY_H
@@ -27,22 +26,16 @@
 
 namespace OrderFactory {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Tag reported back to the caller so it can log what was built.
-// GARBAGE  – random bytes in the header zone        → MALFORMED_REQUEST
-// INVALID  – correct header, body fails validation  → INVALID_ORDER
-// ─────────────────────────────────────────────────────────────────────────────
 enum class FrameKind : uint8_t { NEW, CANCEL, MODIFY, GARBAGE, INVALID };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Per-message-type builders (return an InboundMessage, no framing)
-// ─────────────────────────────────────────────────────────────────────────────
-
+//=============================================================================
+// randomized order creation
+//=============================================================================
 inline InboundMessage make_new(const ClientId cid, std::mt19937& rng) {
-    static std::uniform_int_distribution<Price>    price_dist{1, 10'000};
-    static std::uniform_int_distribution<Quantity> qty_dist  {1, 1'000};
-    static std::uniform_int_distribution<int>      side_dist {0, 1};
-    static std::uniform_int_distribution<int>      type_dist {0, 1};
+    static std::uniform_int_distribution<Price> price_dist{1, 10'000};
+    static std::uniform_int_distribution<Quantity> qty_dist {1, 1'000};
+    static std::uniform_int_distribution<int> side_dist {0, 1};
+    static std::uniform_int_distribution<int> type_dist {0, 1};
 
     const auto order_type = static_cast<OrderType>(type_dist(rng));
     return InboundMessage{
@@ -58,9 +51,6 @@ inline InboundMessage make_new(const ClientId cid, std::mt19937& rng) {
 }
 
 inline InboundMessage make_cancel(const ClientId cid, const OrderId target_oid) {
-    // Server validation only checks message_type == CANCEL; all other fields
-    // are irrelevant.  If target_oid is unknown the engine returns FAILURE
-    // (still an OK-framed response) — exercising that error path is useful.
     return InboundMessage{
         .client_id    = cid,
         .order_id     = target_oid,
@@ -73,11 +63,10 @@ inline InboundMessage make_cancel(const ClientId cid, const OrderId target_oid) 
     };
 }
 
-inline InboundMessage make_modify(const ClientId cid, const OrderId target_oid,
-                                  std::mt19937& rng) {
-    static std::uniform_int_distribution<Price>    price_dist{1, 10'000};
-    static std::uniform_int_distribution<Quantity> qty_dist  {1, 1'000};
-    static std::uniform_int_distribution<int>      side_dist {0, 1};
+inline InboundMessage make_modify(const ClientId cid, const OrderId target_oid, std::mt19937& rng) {
+    static std::uniform_int_distribution<Price> price_dist{1, 10'000};
+    static std::uniform_int_distribution<Quantity> qty_dist {1, 1'000};
+    static std::uniform_int_distribution<int> side_dist {0, 1};
 
     return InboundMessage{
         .client_id    = cid,
@@ -92,11 +81,7 @@ inline InboundMessage make_modify(const ClientId cid, const OrderId target_oid,
 }
 
 inline InboundMessage make_invalid_body(const ClientId cid, std::mt19937& rng) {
-    // Correct "EXCHANGE\n" header will be prepended; body itself fails
-    // validate_message() in one of two ways (coin flip):
-    //   a) LIMIT NEW with price == 0
-    //   b) NEW with quantity > 1 000 000
-    static std::uniform_int_distribution<int>      coin    {0, 1};
+    static std::uniform_int_distribution<Price> coin {0, 1};
     static std::uniform_int_distribution<Quantity> big_qty {1'000'001u, 2'000'000u};
 
     if (coin(rng) == 0) {
@@ -123,32 +108,17 @@ inline InboundMessage make_invalid_body(const ClientId cid, std::mt19937& rng) {
     };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// frame_message
-//   Writes "EXCHANGE\n" + msg + '\n' into dst[0..INBOUND_BSIZE).
-// ─────────────────────────────────────────────────────────────────────────────
-inline void frame_message(const InboundMessage& msg, char* dst) {
-    constexpr size_t hlen = sizeof("EXCHANGE\n") - 1; // 9
-    std::memcpy(dst, "EXCHANGE\n", hlen);
-    std::memcpy(dst + hlen, &msg, sizeof(msg));
-    dst[hlen + sizeof(msg)] = '\n';
+//=============================================================================
+// buffer framing
+//=============================================================================
+inline void frame_message(const InboundMessage& msg, char *dst) {
+    constexpr size_t header_len = sizeof("EXCHANGE\n") - 1; // 9
+    std::memcpy(dst, "EXCHANGE\n", header_len);
+    std::memcpy(dst + header_len, &msg, sizeof(msg));
+    dst[header_len + sizeof(msg)] = '\n';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// build_frame
-//   Top-level entry: rolls RNG, picks a frame type, fills dst[INBOUND_BSIZE],
-//   and returns the FrameKind for logging.
-//
-//   active_order  – a known live order ID for CANCEL / MODIFY targeting.
-//                   Pass 0 when no live orders are tracked; the engine will
-//                   return Status::FAILURE (still an OK-framed response),
-//                   which exercises that code path.
-//   msg_out       – populated with the InboundMessage for NEW/CANCEL/MODIFY so
-//                   the caller can log price/qty/etc.; zeroed for GARBAGE.
-// ─────────────────────────────────────────────────────────────────────────────
-inline FrameKind build_frame(const ClientId  cid,
-                             const OrderId   active_order,
-                             char*           dst,
+inline FrameKind build_frame(const ClientId  cid, const OrderId active_order, char *dst,
                              InboundMessage& msg_out,
                              std::mt19937&   rng) {
     static std::uniform_int_distribution<int>     roll     {0, 99};
@@ -176,8 +146,6 @@ inline FrameKind build_frame(const ClientId  cid,
         return FrameKind::MODIFY;
     }
 
-    // INVALID / MALFORMED (r <= 5) — 50 / 50 between garbage bytes and
-    // a well-framed but validate_message()-failing body.
     if (coin(rng) == 0) {
         for (size_t i = 0; i < INBOUND_BSIZE; ++i)
             dst[i] = static_cast<char>(byte_dist(rng));

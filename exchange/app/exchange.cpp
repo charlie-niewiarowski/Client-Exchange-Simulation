@@ -10,7 +10,9 @@
 #include <sched.h>
 #include <iostream>
 
-Exchange::Exchange() : engine_(in_ring_, out_ring_), server_{in_ring_, out_ring_} {}
+std::atomic<bool> Exchange::stop_{false};
+
+Exchange::Exchange() : engine_(in_ring_, out_ring_, stop_), server_{in_ring_, out_ring_, stop_} {}
 
 void Exchange::run() {
     #if DIAGNOSTICS
@@ -30,4 +32,8 @@ void Exchange::run() {
     pthread_setaffinity_np(server_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
 
     engine_.run();
+}
+
+void Exchange::stop(int sig) {
+    stop_.store(true);
 }

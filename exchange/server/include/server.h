@@ -9,7 +9,7 @@
 
 #include "connection_info.h"
 #include "communication_types.h"
-#include "macros.h"
+#include "config.h"
 
 #include <sys/epoll.h>
 #include <unordered_set>
@@ -20,7 +20,7 @@
 class Server {
 public:
     // Special member functions, the only one that matters is the defined constructor
-    Server(InboundRing& in, OutboundRing& out);
+    Server(InboundRing& in, OutboundRing& out, std::atomic<bool>& stop);
     Server() = delete;
 
     Server(const Server&) = delete;
@@ -62,6 +62,9 @@ private:
     epoll_event events_[MAX_CLIENTS]{};
 
     std::unordered_set<int> writable_fds_;
+
+    // stop
+    std::atomic<bool>& stop_;
 
     //===== setup =====
     std::optional<EpollSocket> setupListenSocket() const;

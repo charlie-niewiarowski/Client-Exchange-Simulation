@@ -6,9 +6,23 @@
 // Lifecycle
 // ─────────
 //  CONNECTING  non-blocking connect() issued; waiting for EPOLLOUT to confirm
-//  SENDING     request frame partially written; waiting for EPOLLOUT to drain
-//  AWAITING    full frame sent; waiting for EPOLLIN response from the exchange
+//  SENDING     batch frame partially written; waiting for EPOLLOUT to drain
+//  AWAITING    pipeline has in-flight requests; waiting for EPOLLIN responses
+//              or, when send_pending==true: waiting for the closed-loop rate
+//              limiter to allow the next batch
 //  RECONNECT   connection lost; reconnect_at_ns holds the next retry deadline
+//
+// Pipelining
+// ──────────
+// Each connection keeps up to PIPELINE_DEPTH requests in-flight simultaneously.
+// buildBatch() packs PIPELINE_DEPTH frames into write_buf and sends them with
+// a single send() call.  As responses arrive, consumeResponse() pops from the
+// front of pipe_ring (FIFO — TCP preserves order) and immediately calls
+// buildBatch() to refill the window.
+//
+//  acks_pending == 0            →  pipeline empty; buildBatch() starts fresh
+//  0 < acks_pending < DEPTH     →  partial pipeline; buildBatch() tops it up
+//  acks_pending == PIPELINE_DEPTH  →  pipeline full; buildBatch() is a no-op
 //
 
 #ifndef CLIENT_STATE_H
@@ -20,7 +34,6 @@
 #include "../config/config.h"
 
 #include <array>
-#include <cstdint>
 #include <random>
 
 enum class ClientPhase : uint8_t {
@@ -36,17 +49,17 @@ struct ClientState {
     int         fd        = -1;
     ClientPhase phase     = ClientPhase::RECONNECT;
 
-    // ── Write buffer (outbound request) ───────────────────────────────────────
-    char   write_buf[INBOUND_BSIZE]{};
+    // ── Write buffer (outbound batch) ─────────────────────────────────────────
+    // Holds up to PIPELINE_DEPTH frames packed consecutively; sent in one
+    // send() call to reduce syscall overhead.
+    char   write_buf[PIPELINE_DEPTH * INBOUND_BSIZE]{};
     size_t write_len = 0;
     size_t write_off = 0;
 
     // ── Read buffer (inbound responses) ───────────────────────────────────────
-    // Sized to OUTBOUND_BSIZE (64 bytes).  Multiple responses can land in a
-    // single recv() call (e.g., a MATCH notification arriving alongside the ACK
-    // for the current request); the consumer must advance past each one rather
-    // than clearing the whole buffer.
-    char   read_buf[OUTBOUND_BSIZE]{};
+    // Sized to hold all responses for one pipelined batch.  Multiple responses
+    // can land in a single recv() call; the consumer must advance past each one.
+    char   read_buf[PIPELINE_DEPTH * OUTBOUND_BSIZE]{};
     size_t read_len = 0;
 
     // ── Active order ID ring (CANCEL / MODIFY targeting) ──────────────────────
@@ -54,27 +67,37 @@ struct ClientState {
     uint32_t active_head = 0;   // next write slot (wraps)
     uint32_t active_size = 0;   // valid entries, capped at MAX_ACTIVE_ORDERS
 
-    // ── Last-sent request metadata (for response log attribution) ─────────────
-    OrderFactory::FrameKind last_kind  = OrderFactory::FrameKind::NEW;
+    // ── Pipeline ring (per-request metadata, FIFO in TCP order) ──────────────
+    struct PipeSlot {
+        OrderFactory::FrameKind kind = OrderFactory::FrameKind::NEW;
+        InboundMessage          msg{};
+    };
+    std::array<PipeSlot, PIPELINE_DEPTH> pipe_ring{};
+    uint32_t ring_head    = 0;  // cumulative frames built   (producer index)
+    uint32_t ring_tail    = 0;  // cumulative responses consumed (consumer index)
+    uint32_t acks_pending = 0;  // ring_head - ring_tail  (current in-flight count)
+
+    // Logging cache — updated by buildOne (just before logSend) and by
+    // consumeResponse (just before logAck / logMatch / logErr).
+    OrderFactory::FrameKind last_kind = OrderFactory::FrameKind::NEW;
     InboundMessage          last_msg{};
-    // True from the moment a request is sent until its ACK is consumed.
-    // Any OK frame received while this is false is an unsolicited MATCH.
-    bool                    expect_ack = false;
+
+    // ── Closed-loop rate limiting ─────────────────────────────────────────────
+    uint64_t next_send_ns = 0;
+    bool     send_pending = false;
 
     // ── Reconnection ──────────────────────────────────────────────────────────
     uint64_t reconnect_at_ns = 0;
     uint32_t reconnect_count = 0;
 
     // ── Statistics ────────────────────────────────────────────────────────────
-    uint64_t requests_sent   = 0;
-    uint64_t responses_ack   = 0;  // first OK after each sent request
-    uint64_t responses_match = 0;  // unsolicited fill notifications
-    uint64_t responses_err   = 0;
-    int64_t  orders_in_flight = 0; // requests sent but not yet responded to
+    uint64_t requests_sent    = 0;
+    uint64_t responses_ack    = 0;  // direct ACK per sent request
+    uint64_t responses_match  = 0;  // unsolicited fill notifications
+    uint64_t responses_err    = 0;
+    int64_t  orders_in_flight = 0;  // requests sent but not yet responded to
 
     // ── Per-client RNG ────────────────────────────────────────────────────────
-    // Seeded independently from the orchestrator's RNG so every client
-    // generates a different order stream with no shared mutable state.
     std::mt19937 rng;
 
     // ─────────────────────────────────────────────────────────────────────────

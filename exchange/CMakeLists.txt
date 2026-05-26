@@ -3,46 +3,44 @@ project(Exchange LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 
-add_library(common_lib INTERFACE)
-add_library(config     INTERFACE)
+include(FetchContent)
 
+FetchContent_Declare(
+        hdr_histogram
+        GIT_REPOSITORY https://github.com/HdrHistogram/HdrHistogram_c.git
+        GIT_TAG 0.11.9
+)
+FetchContent_MakeAvailable(hdr_histogram)
+
+add_library(common_lib INTERFACE)
 target_include_directories(common_lib INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+add_library(config INTERFACE)
 target_include_directories(config INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/config)
 
 set(EXCHANGE_SOURCES
         app/main.cpp
         app/exchange.cpp
-
         engine/src/engine.cpp
-
         server/src/buffer.cpp
         server/src/connection_info.cpp
         server/src/server.cpp
 )
 
-# Release build
-# Optimised; debug symbols and frame pointers kept for perf / profiling
-add_executable(server-release ${EXCHANGE_SOURCES})
-target_link_libraries(server-release PUBLIC common_lib config)
-target_compile_options(server-release PRIVATE
-        -O2
-        -g
-        -fno-omit-frame-pointer
-)
+# Release
+add_executable(exchange-release ${EXCHANGE_SOURCES})
+target_link_libraries(exchange-release PRIVATE common_lib config hdr_histogram_static)
+target_compile_options(exchange-release PRIVATE
+        -O3 -g -fno-omit-frame-pointer -march=native)
 
-# Debug build
-# No optimisation; full debug info, assertions enabled
-add_executable(server-debug ${EXCHANGE_SOURCES})
-target_link_libraries(server-debug PUBLIC common_lib config)
-target_compile_options(server-debug PRIVATE
-        -O0
-        -g3
-        -fno-omit-frame-pointer
-        -fsanitize=address,undefined
-)
-target_link_options(server-debug PRIVATE
-        -fsanitize=address,undefined
-)
+# Debug
+add_executable(exchange-debug ${EXCHANGE_SOURCES})
+target_link_libraries(exchange-debug PRIVATE common_lib config hdr_histogram_static)
+target_compile_options(exchange-debug PRIVATE
+        -O0 -g3 -fno-omit-frame-pointer
+        -fsanitize=address,undefined -march=native)
+target_link_options(exchange-debug PRIVATE
+        -fsanitize=address,undefined)

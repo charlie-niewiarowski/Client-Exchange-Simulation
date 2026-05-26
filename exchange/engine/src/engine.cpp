@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <immintrin.h>
 #include <iostream>
 #include <pthread.h>
 #include <sched.h>
@@ -24,18 +25,20 @@ void write_to_console(const Trade &trade);
 //=============================================================================
 // Special Member Functions + Their Helpers
 //=============================================================================
-Engine::Order::Order(const OrderId id, const OrderRequest order_request) {
+Engine::Order::Order(const OrderId id, const OrderRequest& order_request) {
     id_ = id;
     client_id_ = order_request.get_clientId();
     side_ = order_request.get_side();
     order_type_ = order_request.get_type();
     price_ = order_request.get_price();
     initial_quantity_ = order_request.get_quantity();
-    remaining_quantity_ =  order_request.get_quantity();
+    remaining_quantity_ = order_request.get_quantity();
+    recv_tsc = order_request.get_recv_tsc();
+    engine_in_tsc = order_request.get_engine_in_tsc();
 }
 
-Engine::Engine(InboundRing& in_ring, OutboundRing& out_ring)
-    : in_ring_(in_ring), out_ring_(out_ring) {
+Engine::Engine(InboundRing& in_ring, OutboundRing& out_ring, std::atomic<bool>& stop)
+    : in_ring_(in_ring), out_ring_(out_ring), stop_(stop) {
     orders_.reserve(PREALLOCATION_COUNT);
 }
 
@@ -79,20 +82,11 @@ void Engine::step() {
 //=============================================================================
 void Engine::handleMatching() {
     InboundMessage msg{};
-    int spins{};
 
-    for ever {
+    while (!stop_.load(std::memory_order_relaxed)) {
         if (in_ring_.pop(msg)) {
-            spins = 0;
+            msg.engine_in_tsc = __rdtsc(); // t2: engine has received the inbound message
             executeRequest(msg);
-        }
-        else {
-            if (++spins > 1000) {
-                std::this_thread::sleep_for(std::chrono::microseconds(10));
-            }
-            else if (spins > 100) {
-                std::this_thread::yield();
-            }
         }
     }
 }
@@ -101,7 +95,7 @@ void Engine::handleMatching() {
 void Engine::exposeTrades() {
     Trade trade{};
 
-    for ever {
+    while (!stop_.load(std::memory_order_relaxed)) {
         while (trades_ring_.pop(trade)) {
             write_to_console(trade);
         }
@@ -114,13 +108,25 @@ void Engine::exposeTrades() {
 //=============================================================================
 void Engine::executeRequest(InboundMessage msg) {
     // For NEW orders assign the id now so it can be returned in the response.
-    OrderId assigned_id = (msg.message_type == MessageType::NEW) ? next_id_++ : msg.order_id;
-    OutboundMessage outbound_msg{msg.client_id, assigned_id, msg.message_type, Status::SUCCESS};
+    const OrderId assigned_id = (msg.message_type == MessageType::NEW) ? next_id_++ : msg.order_id;
+
+    // Designated initializer: timestamps must be set explicitly now that they lead the struct.
+    OutboundMessage outbound_msg{
+        .recv_tsc      = msg.recv_tsc,
+        .engine_in_tsc = msg.engine_in_tsc,
+        .client_id     = msg.client_id,
+        .order_id      = assigned_id,
+        .message_type  = msg.message_type,
+        .status        = Status::SUCCESS
+    };
     bool suppress_ack = false;
 
     switch (msg.message_type) {
         case MessageType::NEW:
-            suppress_ack = addOrder(assigned_id, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
+            suppress_ack = addOrder(assigned_id, OrderRequest{
+                msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity,
+                msg.recv_tsc, msg.engine_in_tsc
+            });
             break;
         case MessageType::CANCEL:
             if (!orders_.contains(msg.order_id) || orders_.at(msg.order_id).client_id_ != msg.client_id) {
@@ -136,7 +142,10 @@ void Engine::executeRequest(InboundMessage msg) {
                 outbound_msg.status = Status::FAILURE;
                 break;
             }
-            suppress_ack = modifyOrder(msg.order_id, OrderRequest{msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity});
+            suppress_ack = modifyOrder(msg.order_id, OrderRequest{
+                msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity,
+                msg.recv_tsc, msg.engine_in_tsc
+            });
             break;
         default:
             #if LOGGING
@@ -146,6 +155,7 @@ void Engine::executeRequest(InboundMessage msg) {
     }
 
     if (!suppress_ack) {
+        outbound_msg.engine_out_tsc = __rdtsc(); // t3: engine is pushing the outbound message
         out_ring_.push(outbound_msg);
     }
 }
@@ -246,8 +256,25 @@ bool Engine::matchOrders() {
                 TradeInfo(bid.client_id_, bid.id_, bid.price_, fill_quantity),
                 TradeInfo(ask.client_id_, ask.id_, ask.price_, fill_quantity)
             };
-            OutboundMessage buy_msg(bid.client_id_, bid.id_, MessageType::MATCH, Status::SUCCESS);
-            OutboundMessage ask_msg(ask.client_id_, ask.id_, MessageType::MATCH, Status::SUCCESS);
+
+            // Designated initializers: carry each order's own t1/t2 so the server
+            // can form a complete LatencySample per client.
+            OutboundMessage buy_msg{
+                .recv_tsc      = bid.recv_tsc,
+                .engine_in_tsc = bid.engine_in_tsc,
+                .client_id     = bid.client_id_,
+                .order_id      = bid.id_,
+                .message_type  = MessageType::MATCH,
+                .status        = Status::SUCCESS
+            };
+            OutboundMessage ask_msg{
+                .recv_tsc      = ask.recv_tsc,
+                .engine_in_tsc = ask.engine_in_tsc,
+                .client_id     = ask.client_id_,
+                .order_id      = ask.id_,
+                .message_type  = MessageType::MATCH,
+                .status        = Status::SUCCESS
+            };
 
             bid.fill(fill_quantity);
             ask.fill(fill_quantity);
@@ -262,6 +289,10 @@ bool Engine::matchOrders() {
                 orders_.erase(ask_id);
             }
 
+            // t3: one stamp shared by both outbound messages (they are pushed back-to-back)
+            const Timestamp t3 = __rdtsc();
+            buy_msg.engine_out_tsc = t3;
+            ask_msg.engine_out_tsc = t3;
             out_ring_.push(buy_msg);
             out_ring_.push(ask_msg);
             trades_ring_.push(trade);
