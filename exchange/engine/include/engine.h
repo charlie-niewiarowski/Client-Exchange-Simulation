@@ -9,6 +9,7 @@
 #include <atomic>
 #include <unordered_map>
 #include <stdexcept>
+#include <thread>
 
 #include "engine_types.h"
 #include "trade.h"
@@ -31,7 +32,6 @@ public:
 
     void run();
 
-    // Testing — compiled in only when TESTING is defined in macros.h
     #if TESTING
     void step();
     size_t order_count()     const { return orders_.size(); }
@@ -50,14 +50,13 @@ public:
     bool pop_trade(Trade& t) { return trades_ring_.pop(t); }
     OrderId next_order_id() const { return next_id_.load(std::memory_order_relaxed); }
     #endif // TESTING
-
 private:
     class Order { // main data variable
     public:
         Order(OrderId id, const OrderRequest &order_request);
 
         bool is_filled() const { return remaining_quantity_ == 0; }
-        void fill(Quantity quantity) {
+        void fill(const Quantity quantity) {
             if (quantity > remaining_quantity_) {
                 throw std::logic_error("Filling quantity larger than remaining quantity");
             }
@@ -68,7 +67,8 @@ private:
         friend class Engine;
     private:
         Timestamp recv_tsc;           // 8 bytes  @ 0
-        Timestamp engine_in_tsc;      // 8 bytes  @ 8
+        Timestamp server_push_tsc;    // 8 bytes  @ 8
+        Timestamp engine_pop_tsc;
 
         OrderId id_;                  // 8 bytes  @ 16
         ClientId client_id_;          // 4 bytes  @ 24
@@ -81,32 +81,36 @@ private:
     }; // 44 bytes (sizeof verified by compiler)
     using OrderMap = std::unordered_map<OrderId, Order>;
 
+    //===== threads ======
+    std::jthread matching_thread_;
+
+    //===== data containers ======
     BidLevels bids_;
     AskLevels asks_;
     OrderMap orders_;
     std::atomic<OrderId> next_id_{0};
 
+    //===== communication with server ======
     InboundRing& in_ring_;
     OutboundRing& out_ring_;
 
-    RingBuffer<Trade> trades_ring_{TRADE_RING_COUNT};
-
+    //===== stop ======
     std::atomic<bool>& stop_;
 
-    // run() helper suite
+    //===== matching ======
     void handleMatching();
-
-    #if LOGGING
-    void exposeTrades();
-    #endif
-
-    // matching helpers
-    void executeRequest(InboundMessage msg);
-    bool addOrder(OrderId id, OrderRequest order_request);
+    void executeRequest(const InboundMessage &msg);
+    bool addOrder(OrderId id, const OrderRequest &order_request);
     void cancelOrder(OrderId id);
-    bool modifyOrder(OrderId id, OrderRequest request);
+    bool modifyOrder(OrderId id, const OrderRequest &request);
     bool matchOrders();
     bool canMatch(Side side, Price price) const;
+
+    #if LOGGING
+    std::jthread expose_thread_;
+    RingBuffer<Trade> trades_ring_{TRADE_RING_COUNT};
+    void exposeTrades();
+    #endif
 };
 
 

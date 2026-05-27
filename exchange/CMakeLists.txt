@@ -12,7 +12,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(hdr_histogram)
 
-add_library(common_lib INTERFACE)
+add_library(common_lib INTERFACE
+        include/lib.h)
 target_include_directories(common_lib INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

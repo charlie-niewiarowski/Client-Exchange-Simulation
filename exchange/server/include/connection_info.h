@@ -9,15 +9,55 @@
 #include "socket.h"
 #include "buffer.h"
 #include "ring_buffer.hpp"
+#include "config.h"
 
+#include <array>
 #include <algorithm>
+
+//=============================================================================
+// Buffer aliases
+//=============================================================================
+
+// Per-connection read buffer -> holds READ_BATCH_SIZE complete inbound frames.
+using ReadBuffer  = Buffer<READ_BATCH_SIZE  * INBOUND_BSIZE>;
+
+// Per-connection write buffer -> holds WRITE_BATCH_SIZE complete outbound frames.
+// Multiple serialised responses are appended here and sent in a single syscall.
+using WriteBuffer = Buffer<WRITE_BATCH_SIZE * OUTBOUND_BSIZE>;
 
 using OutboundQueue = RingBuffer<OutboundMessage>;
 
+//=============================================================================
+// PendingLatency
+//=============================================================================
+
+// Holds the data needed to record one LatencySample once the write batch is
+// fully sent (t6).  Filled by appendResponse; drained by finishBatch.
+// record == false -> MATCH or error response; skip it.
+struct PendingLatency {
+    Timestamp recv_tsc;
+    Timestamp server_push_tsc;
+    Timestamp engine_pop_tsc;
+    Timestamp engine_push_tsc;
+    Timestamp server_pop;   // t5 -> message dequeued and serialised
+    bool      record;
+};
+
+//=============================================================================
+// ConnectionInfo
+//=============================================================================
+//
+// Owns all per-connection state.  The two field groups below must be accessed
+// only from the thread that owns them.  Mixing threads is a data race.
+//
+//   Inbound thread  (handleRequests) -> reads socket, parses frames, pushes to engine ring
+//   Outbound thread (serveResponses) -> pops engine responses, fills write batches, sends
+//
+// The socket fd is read-only after construction; both threads may call fd().
+
 class ConnectionInfo {
 public:
-    // special member functions
-    explicit ConnectionInfo(EpollSocket sock) // constructed when a new client connects. takes ownership of the socket.
+    explicit ConnectionInfo(EpollSocket sock)
         : sock_(std::move(sock)) {}
 
     ConnectionInfo(const ConnectionInfo&)            = delete;
@@ -27,58 +67,56 @@ public:
 
     ~ConnectionInfo() = default;
 
-    // socket functions
+    //===== shared (read-only after construction) =====
+
     [[nodiscard]] int fd() const { return sock_.get(); }
 
-    // buffer functions
-    Buffer& read_buffer() { return read_buf_; }
-    Buffer& write_buffer() { return write_buf_; }
+    //===== inbound thread =====
+    // read_buf_ and inbound_ are touched only by handleRequests.
 
-    // outbound queue functions
-    void push_outbound(const OutboundMessage& msg) { outbound_.push(msg); }
-    [[nodiscard]] OutboundMessage pop_outbound();
+    ReadBuffer& read_buffer() { return read_buf_; }
+
+    [[nodiscard]] const InboundMessage& inbound() const { return inbound_; }
+    void set_inbound(const InboundMessage& m)           { inbound_ = m; }
+
+    //===== outbound thread =====
+    // Everything below is touched only by serveResponses.
+
+    WriteBuffer& write_buffer() { return write_buf_; }
+
+    // Per-connection queue of engine responses waiting to be serialised.
+    // Pushed by routeOutboundMessages; popped by appendResponse.
+    void            push_outbound(const OutboundMessage& msg) { outbound_.push(msg); }
+    OutboundMessage pop_outbound();
     [[nodiscard]] bool has_pending_outbound() const { return !outbound_.empty(); }
 
-    // inbound msg functions
-    [[nodiscard]] const InboundMessage& inbound() const { return inbound_; }
-    void set_inbound(const InboundMessage &m) { inbound_ = m; }
+    //===== latency batch (outbound thread) =====
+    // appendResponse fills one slot per serialised message.
+    // finishBatch records all filled slots (setting t6) then clears the array.
 
-    // state functions
-    [[nodiscard]] ConnectionState state() const { return state_; }
-    void set_state(ConnectionState s) { state_ = s; }
-
-    // error functions
-    void push_error(ServerError err);
-
-    // latency: serializeResponse stores t1/t2/t3 from the outbound message here;
-    // sendResponse completes the sample with t4 before writing to the socket.
-    void set_pending_timestamps(Timestamp t1, Timestamp t2, Timestamp t3) {
-        pending_t1_ = t1; pending_t2_ = t2; pending_t3_ = t3;
-        has_pending_latency_ = true;
+    void push_latency(const PendingLatency& e) {
+        if (latency_count_ < static_cast<int>(latency_batch_.size()))
+            latency_batch_[latency_count_++] = e;
     }
-    [[nodiscard]] bool      has_pending_latency() const { return has_pending_latency_; }
-    [[nodiscard]] Timestamp pending_t1()          const { return pending_t1_; }
-    [[nodiscard]] Timestamp pending_t2()          const { return pending_t2_; }
-    [[nodiscard]] Timestamp pending_t3()          const { return pending_t3_; }
-    void clear_pending_latency() { has_pending_latency_ = false; }
+    [[nodiscard]] int                   latency_count()            const { return latency_count_; }
+    [[nodiscard]] const PendingLatency& latency_entry(const int i) const { return latency_batch_[i]; }
+    void clear_latency_batch() { latency_count_ = 0; }
 
 private:
-    // data
+    //===== shared (read-only after construction) =====
     const EpollSocket sock_;
-    Buffer read_buf_;
-    Buffer write_buf_;
-    OutboundQueue outbound_{RINGBUF_SIZE};
+
+    //===== inbound thread =====
+    ReadBuffer     read_buf_;
     InboundMessage inbound_{};
 
-    // state
-    ConnectionState state_ = ConnectionState::READING;
+    //===== outbound thread =====
+    WriteBuffer   write_buf_;
+    OutboundQueue outbound_{RINGBUF_SIZE};
 
-    // pending latency timestamps (t1/t2/t3 from the outbound message; t4 added in sendResponse)
-    Timestamp pending_t1_{};
-    Timestamp pending_t2_{};
-    Timestamp pending_t3_{};
-    bool has_pending_latency_{false};
+    // One slot per message appended to the current write batch.
+    std::array<PendingLatency, WRITE_BATCH_SIZE> latency_batch_{};
+    int latency_count_{0};
 };
-
 
 #endif //TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP

@@ -13,6 +13,7 @@
 //
 
 #include "../include/load_generator.h"
+#include "../config/config.h"
 
 #include <csignal>
 #include <cstdio>
@@ -38,8 +39,8 @@ static uint64_t now_ns() {
 }
 
 int main(const int argc, char* argv[]) {
-    int      num_clients = 10;
-    uint32_t rng_seed    = std::random_device{}();
+    int num_clients = 10;
+    uint32_t rng_seed = std::random_device{}();
 
     if (argc >= 2) {
         num_clients = std::atoi(argv[1]);
@@ -52,22 +53,15 @@ int main(const int argc, char* argv[]) {
         rng_seed = static_cast<uint32_t>(std::strtoul(argv[2], nullptr, 10));
     }
 
-    // Pre-format the rate cap once; used in both the startup banner and stats.
-    char cap_str[32] = "unlimited";
-    if constexpr (EXPECTED_THROUGHPUT > 0)
-        std::snprintf(cap_str, sizeof(cap_str), "%u", static_cast<unsigned>(EXPECTED_THROUGHPUT));
-
     std::fprintf(stderr,
         "=== Exchange load generator ===\n"
         "  clients : %d\n"
         "  seed    : %u\n"
         "  target  : %s:%d\n"
-        "  cap     : %s orders/s\n"
         "  logging : %s\n"
         "Ctrl-C to stop.\n\n",
         num_clients, rng_seed,
         EXCHANGE_HOST, EXCHANGE_PORT,
-        cap_str,
         LOG_ENABLED ? "ON" : "OFF");
 
     struct sigaction sa{};
@@ -115,8 +109,7 @@ int main(const int argc, char* argv[]) {
         "  ACK/s           : %.0f\n"
         "  MATCH/s         : %.0f\n"
         "  ERR/s           : %.0f\n"
-        "  total resp/s    : %.0f\n"
-        "  target (config) : %s\n",
+        "  total resp/s    : %.0f\n",
         elapsed_s,
         static_cast<unsigned long long>(s.requests_sent),
         static_cast<unsigned long long>(s.responses_ack),
@@ -127,8 +120,7 @@ int main(const int argc, char* argv[]) {
         static_cast<double>(s.responses_ack)   * inv,
         static_cast<double>(s.responses_match) * inv,
         static_cast<double>(s.responses_err)   * inv,
-        static_cast<double>(total_responses)   * inv,
-        cap_str);
+        static_cast<double>(total_responses)   * inv);
 
     return 0;
 }
