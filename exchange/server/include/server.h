@@ -5,29 +5,22 @@
 #ifndef TOYEXCHANGE_ORDERGATEWAY_HPP
 #define TOYEXCHANGE_ORDERGATEWAY_HPP
 
-#include <array>
-#include <atomic>
-#include <optional>
-#include <thread>
-#include <unordered_set>
-#include <utility>
-#include <sys/epoll.h>
-
 #include "connection_info.h"
 #include "communication_types.h"
 #include "config.h"
 #include "ring_buffer.hpp"
 
+#include <array>
+#include <atomic>
+#include <optional>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <sys/epoll.h>
 
-// Pushed by handleRequests when a protocol/IO error is detected on a client fd.
-// Consumed by serveResponses so the error reply is serialized and sent without
-// the inbound thread ever touching outbound-owned state.
-struct ErrorRecord {
-    int         fd;
-    ServerError err;
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
+// Capacity of the server-level error channel (SPSC: inbound → outbound).
+// Sized to absorb a full read batch of errors from every connected client.
+inline constexpr int ERROR_CHANNEL_SIZE = MAX_CLIENTS * READ_BATCH_SIZE;
 
 class Server {
 public:
@@ -49,95 +42,82 @@ private:
     std::jthread outbound_thread_;
 
     //===== connection state =====
+    // inbound_map_  : sole owner is the inbound thread.
+    // outbound_map_ : sole owner is the outbound thread (created by inbound,
+    //                 but only accessed by outbound after the first ring push).
+    std::array<std::optional<InboundState>,  MAX_CLIENTS + 10> inbound_map_{};
+    std::array<std::optional<OutboundState>, MAX_CLIENTS + 10> outbound_map_{};
 
-    // INBOUND-THREAD-OWNED only handleRequests and its callees touch this.
-    std::array<std::optional<ConnectionInfo>, MAX_CLIENTS + 10> info_map_{};
+    // ClientId → fd routing: outbound loads fd, checks condemned_inbound_[fd],
+    // then accesses outbound_map_[fd].
+    std::unordered_map<ClientId, std::atomic<int>> client_map_;
 
-    // ClientId -> ConnectionInfo* routing table.
-    std::array<std::atomic<ConnectionInfo*>, MAX_CLIENTS + 10> client_map_{};
-
-    //===== cross thread queues =====
-
-    // inbound -> outbound: error responses the inbound thread cannot push itself
-    // (push_outbound / writable_fds_ are outbound-thread-owned).
-    RingBuffer<ErrorRecord> error_ring_{128};
-
-    // outbound -> inbound: file descriptors that the outbound thread wants the
-    // inbound thread to close (because a send failed with a hard error).
-    // Outbound condemns and abandons the connection; inbound does the actual
-    // close and memory cleanup.
-    RingBuffer<int> close_ring_{128};
-
-    // inbound -> outbound: new fd / ConnectionInfo* pairs produced by
-    // registerConnection so outbound can populate fd_to_info_.
-    RingBuffer<std::pair<int, ConnectionInfo*>> register_ring_{128};
+    // Two-phase close flags.
+    //   condemned_inbound_[fd]  : inbound sets (release) when it is done with fd.
+    //                             outbound scans (acquire) in handleDisconnectsOutbound.
+    //   condemned_outbound_[fd] : outbound sets (release) when it is done with fd.
+    //                             inbound scans (acquire) in handleDisconnectsInbound.
+    // inbound_map_[fd].reset() happens only after condemned_outbound_[fd] is seen,
+    // guaranteeing all outbound accesses to outbound_map_[fd] have completed.
+    std::array<std::atomic<bool>, MAX_CLIENTS + 10> condemned_inbound_{};
+    std::array<std::atomic<bool>, MAX_CLIENTS + 10> condemned_outbound_{};
 
     //===== intermodule rings =====
     InboundRing&  in_ring_;
     OutboundRing& out_ring_;
 
-    //===== stop flag =====
-    std::atomic<bool>& stop_;
+    // SPSC error channel: inbound pushes validation/IO errors, outbound drains.
+    RingBuffer<PendingError> error_channel_{ERROR_CHANNEL_SIZE};
 
-    //===== inbound epoll =====
-    int epoll_in_ = -1;
+    //===== epoll =====
+    int epoll_in_  = -1;
     epoll_event events_in_[MAX_CLIENTS]{};
 
-    //===== outbound epoll =====
-    // epoll_out_ is used only for partial-send completions (EPOLLOUT).
     int epoll_out_ = -1;
     epoll_event events_out_[MAX_CLIENTS]{};
 
-    //===== outbound state =====
-    // Set of fds that have messages queued or a partial send in progress.
+    //===== outbound-private state =====
     std::unordered_set<int> writable_fds_;
-
-    // Outbound-thread's own fd → ConnectionInfo* table.
-    // Populated from register_ring_; cleared by condemnConnection.
-    // Never shared with the inbound thread.
-    std::array<ConnectionInfo*, MAX_CLIENTS + 10> fd_to_info_{};
-
-    // Set to true by condemnConnection.  Checked before every outbound access
-    // so stale epoll_out_ events for a condemned fd are safely skipped without
-    // ever touching the (possibly already-freed) ConnectionInfo.
-    std::array<bool, MAX_CLIENTS + 10> condemned_fds_{};
-
-    // Tracks which fds are currently registered with epoll_out_ for EPOLLOUT.
-    // Prevents double EPOLL_CTL_ADD when a partial send is already in progress.
     std::array<bool, MAX_CLIENTS + 10> epollout_armed_{};
+
+    //===== stop flag =====
+    std::atomic<bool>& stop_;
 
     //===== setup =====
     bool setupEpoll();
     [[nodiscard]] std::optional<EpollSocket> setupListenSocket() const;
 
-    //===== handleRequests =====
+    //===== handleRequests (inbound thread) =====
     void handleRequests();
-    std::optional<int> registerConnection(int listen_fd);
+    void registerConnection(int listen_fd);
     void readAndProcessBytes(int client_fd);
-    void readRequest(ConnectionInfo& info);
-    void processRequest(ConnectionInfo& info);
+    // Returns true if a disconnect was detected (condemned_inbound_ set).
+    bool readRequest(InboundState& state);
+    void processRequest(InboundState& state);
 
-    //===== serveResponses =====
+    //===== serveResponses (outbound thread) =====
     void serveResponses();
     void routeOutboundMessages();
     void beginSends();
-    // Pops one message from info.outbound_, serialises it as a fixed-size
-    // OUTBOUND_BSIZE frame, and appends it to the write buffer.
-    // Also saves a PendingLatency entry so finishBatch can record t6 later.
-    static void appendResponse(ConnectionInfo& info);
-    void sendResponse(ConnectionInfo& info);
-    // Called when the write buffer is fully drained.  Records latency for every
-    // message in the batch, clears latency_batch_, and resets the write buffer.
-    void finishBatch(ConnectionInfo& info) const;
+    static void appendResponse(OutboundState& out);
+    // Returns true if a fatal send error occurred.  The caller is responsible
+    // for condemning the fd; sendResponse never calls condemnConnection itself.
+    bool sendResponse(int fd, OutboundState& out);
+    void finishBatch(OutboundState& out) const;
 
-    //===== other helpers =====
-    // Condemns a connection from the outbound thread: marks it, removes it from
-    // writable_fds_ / fd_to_info_, and posts its fd to close_ring_ for the
-    // inbound thread to call closeConnection.
-    void condemnConnection(int fd);
+    //===== disconnect handling =====
+    // Two-phase close: each thread cleans up its own state and signals the other.
+    // inbound scans condemned_outbound_ (acquire); when set, resets inbound_map_[fd].
+    // outbound scans condemned_inbound_ (acquire); when set, resets outbound_map_[fd]
+    //   and sets condemned_outbound_ (release) to unblock inbound's final teardown.
+    void handleDisconnectsInbound();
+    void handleDisconnectsOutbound();
 
-    // Called only from the inbound thread.
-    void closeConnection(int client_fd);
+    // Called when a thread detects a fatal condition on fd.
+    // caller_inbound=true : removes fd from epoll_in_, sets condemned_inbound_ (release).
+    // caller_inbound=false: removes fd from epoll_out_, resets outbound_map_[fd],
+    //                       sets condemned_outbound_ (release).
+    void condemnConnection(int fd, bool caller_inbound);
 };
 
 #endif //TOYEXCHANGE_ORDERGATEWAY_HPP

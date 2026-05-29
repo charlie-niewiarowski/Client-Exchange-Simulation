@@ -19,17 +19,18 @@
 #include "../config/config.h"
 
 #include <atomic>
+#include <random>
 #include <vector>
 #include <sys/epoll.h>
 
 class LoadGenerator {
 public:
-    explicit LoadGenerator(int num_clients, uint32_t rng_seed = std::random_device{}());
+    explicit LoadGenerator(int num_clients, uint64_t rng_seed = std::random_device{}());
 
-    LoadGenerator(const LoadGenerator&)            = delete;
+    LoadGenerator(const LoadGenerator&) = delete;
     LoadGenerator& operator=(const LoadGenerator&) = delete;
-    LoadGenerator(LoadGenerator&&)                 = delete;
-    LoadGenerator& operator=(LoadGenerator&&)      = delete;
+    LoadGenerator(LoadGenerator&&) = delete;
+    LoadGenerator& operator=(LoadGenerator&&) = delete;
 
     ~LoadGenerator();
 
@@ -41,26 +42,25 @@ public:
         uint64_t responses_ack;
         uint64_t responses_match;
         uint64_t responses_err;
-        int64_t  orders_in_flight;
+        int64_t orders_in_flight;
     };
     [[nodiscard]] Stats stats() const;
 
 private:
-    int                      num_clients_;
-    int                      epoll_fd_ = -1;
+    int num_clients_;
+    int epoll_fd_ = -1;
     std::vector<ClientState> clients_;
-    std::mt19937             rng_;
-    std::atomic<bool>        running_{true};
-    epoll_event              events_[CLIENT_EPOLL_BATCH]{};
+    std::atomic<bool> running_{true};
+    epoll_event events_[CLIENT_EPOLL_BATCH]{};
 
     [[nodiscard]] bool setupEpoll();
     bool connectClient(ClientState& cs);
 
     void handleConnect (ClientState& cs);  // EPOLLOUT: async connect completed
     void handleReadable(ClientState& cs);  // EPOLLIN:  responses ready
-    void flushWrite    (ClientState& cs);  // EPOLLOUT: finish a blocked send
-    void buildBatch    (ClientState& cs);  // pack + send PIPELINE_DEPTH frames
-    void reconnect     (ClientState& cs);  // close + reconnect immediately
+    void flushWrite (ClientState& cs);  // EPOLLOUT: finish a blocked send
+    void buildBatch (ClientState& cs);  // pack + send PIPELINE_DEPTH frames
+    void reconnect (ClientState& cs);  // close + reconnect immediately
 
     void epollAdd(ClientState& cs, uint32_t events);
     void epollMod(ClientState& cs, uint32_t events);

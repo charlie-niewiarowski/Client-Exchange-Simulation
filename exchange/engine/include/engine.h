@@ -102,7 +102,7 @@ private:
     void executeRequest(const InboundMessage &msg);
     bool addOrder(OrderId id, const OrderRequest &order_request);
     void cancelOrder(OrderId id);
-    bool modifyOrder(OrderId id, const OrderRequest &request);
+    bool modifyOrder(OrderId id, const OrderRequest &order_request);
     bool matchOrders();
     bool canMatch(Side side, Price price) const;
 

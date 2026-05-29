@@ -18,7 +18,7 @@ class RingBuffer {
     alignas(64) std::unique_ptr<T[]> buffer;
     alignas(64) uint32_t mask;
 public:
-    explicit RingBuffer(uint32_t N) :
+    explicit RingBuffer(uint32_t N) : // N must be a power of two because of mask
         buffer(std::make_unique<T[]>(N)),
         mask(N - 1)
     {

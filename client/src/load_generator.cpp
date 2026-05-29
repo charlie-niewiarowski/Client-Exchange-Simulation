@@ -38,14 +38,14 @@ static inline void advanceRead(ClientState& cs, const size_t n) {
 // Special member functions
 //=============================================================================
 
-LoadGenerator::LoadGenerator(const int num_clients, const uint32_t rng_seed)
-    : num_clients_(num_clients), rng_(rng_seed)
+LoadGenerator::LoadGenerator(const int num_clients, const uint64_t rng_seed)
+    : num_clients_(num_clients)
 {
+    OrderFactory::instance(rng_seed);  // seed the singleton before first build_frame
     clients_.reserve(static_cast<size_t>(num_clients_));
     for (int i = 0; i < num_clients_; ++i) {
         ClientState& cs = clients_.emplace_back();
-        cs.client_id    = static_cast<uint32_t>(i + 1);
-        cs.rng          = std::mt19937{rng_()};
+        cs.client_id = static_cast<uint32_t>(i + 1);
     }
 }
 
@@ -68,7 +68,7 @@ void LoadGenerator::run() {
     for (auto& cs : clients_) connectClient(cs);
 
     while (running_.load(std::memory_order_relaxed)) {
-        const int nfds = epoll_wait(epoll_fd_, events_, CLIENT_EPOLL_BATCH, 1);
+        const int nfds = epoll_wait(epoll_fd_, events_, CLIENT_EPOLL_BATCH, 0);
         if (nfds == -1) {
             if (errno == EINTR) continue;
             std::fprintf(stderr, "epoll_wait: %s\n", std::strerror(errno));
@@ -76,7 +76,7 @@ void LoadGenerator::run() {
         }
 
         for (int i = 0; i < nfds; ++i) {
-            auto*          cs = static_cast<ClientState*>(events_[i].data.ptr);
+            auto* cs = static_cast<ClientState*>(events_[i].data.ptr);
             const uint32_t ev = events_[i].events;
 
             if (ev & (EPOLLERR | EPOLLHUP)) {
@@ -180,8 +180,12 @@ void LoadGenerator::handleReadable(ClientState& cs) {
         const char* frame = cs.read_buf;
 
         // Validate the "EXCHANGE\n" prefix before inspecting the type byte.
-        // A mismatched prefix means protocol loss of sync -> reconnect.
+        // A mismatched prefix means the server sent protocol-violating bytes.
         if (memcmp(frame, "EXCHANGE\n", 9) != 0) {
+            #if LOGGING
+            std::fprintf(stderr, "[WARN]  cid:%-6u :: bad response header\n",
+                         static_cast<unsigned>(cs.client_id));
+            #endif
             reconnect(cs);
             return;
         }
@@ -192,14 +196,49 @@ void LoadGenerator::handleReadable(ClientState& cs) {
                 --cs.acks_pending;
                 --cs.orders_in_flight;
                 ++cs.responses_ack;
+                #if LOGGING
+                {
+                    ClientId log_cid; std::memcpy(&log_cid, frame + 12, sizeof(log_cid));
+                    OrderId  log_oid; std::memcpy(&log_oid, frame + 16, sizeof(log_oid));
+                    std::fprintf(stderr, "[OK]    cid:%-6u oid:%llu\n",
+                                 static_cast<unsigned>(log_cid),
+                                 static_cast<unsigned long long>(log_oid));
+                }
+                #endif
             } else {
                 ++cs.responses_match;  // unsolicited fill notification
+                #if LOGGING
+                {
+                    ClientId log_cid; std::memcpy(&log_cid, frame + 12, sizeof(log_cid));
+                    OrderId  log_oid; std::memcpy(&log_oid, frame + 16, sizeof(log_oid));
+                    std::fprintf(stderr, "[MATCH] cid:%-6u oid:%llu\n",
+                                 static_cast<unsigned>(log_cid),
+                                 static_cast<unsigned long long>(log_oid));
+                }
+                #endif
             }
         } else if (type == 'E') {
             if (cs.acks_pending > 0) { --cs.acks_pending; --cs.orders_in_flight; }
             ++cs.responses_err;
+            #if LOGGING
+            {
+                // Error string starts after "EXCHANGE\nERROR\n" (15 bytes), ends at '\n'.
+                const char* err_start = frame + 15;
+                const char* nl = static_cast<const char*>(
+                    std::memchr(err_start, '\n', FRAME_SIZE - 15));
+                const int err_len = nl ? static_cast<int>(nl - err_start)
+                                       : static_cast<int>(FRAME_SIZE - 15);
+                std::fprintf(stderr, "[ERR]   cid:%-6u :: %.*s\n",
+                             static_cast<unsigned>(cs.client_id), err_len, err_start);
+            }
+            #endif
         } else {
-            // Unknown type byte -> protocol error.
+            // Unknown type byte — server sent something that violates the protocol.
+            #if LOGGING
+            std::fprintf(stderr, "[WARN]  cid:%-6u :: unknown response type '\\x%02x'\n",
+                         static_cast<unsigned>(cs.client_id),
+                         static_cast<unsigned char>(type));
+            #endif
             reconnect(cs);
             return;
         }
@@ -221,12 +260,12 @@ void LoadGenerator::buildBatch(ClientState& cs) {
     if (cs.write_len > 0)                  return;  // batch still in flight
     if (cs.acks_pending == PIPELINE_DEPTH) return;  // pipeline saturated
 
+    auto& factory = OrderFactory::instance();
     cs.write_off = 0;
     cs.write_len = 0;
     while (cs.acks_pending < PIPELINE_DEPTH) {
         InboundMessage msg{};
-        OrderFactory::build_frame(cs.client_id, 0,
-            cs.write_buf + cs.write_len, msg, cs.rng);
+        factory.build_frame(cs.client_id, 0, cs.write_buf + cs.write_len, msg);
         cs.write_len    += INBOUND_BSIZE;
         ++cs.acks_pending;
         ++cs.requests_sent;

@@ -1,162 +1,193 @@
 //
 // Created by cniew on 5/24/26.
 //
-// Header-only factory
+// Singleton order factory.  One global RNG + GBM mid-price shared across all
+// clients.  Call OrderFactory::instance() (passing an optional seed on the
+// first call) to obtain the process-wide instance.
+//
+// Wire frame layout (INBOUND_BSIZE = 58 bytes):
+//   "EXCHANGE\n"   (9 bytes)
+//   InboundMessage (48 bytes)
+//   '\n'           ( 1 byte)
 //
 // Probability table (uniform roll over [0, 99]):
-//   roll > 40  (59 / 100)  -> NEW    order
-//   roll > 15  (25 / 100)  -> CANCEL order
-//   roll >  5  (10 / 100)  -> MODIFY order
-//   roll <= 5  ( 6 / 100)  -> INVALID / MALFORMED
+//   r > 25  (74/100) -> NEW
+//   r > 10  (14/100) -> CANCEL
+//   r >  3  ( 7/100) -> MODIFY
+//   r <= 3  ( 4/100) -> INVALID / GARBAGE (coin flip decides which)
 //
-// Every frame is exactly INBOUND_BSIZE bytes:
-//   "EXCHANGE\n"   (9 bytes)
-//   InboundMessage (20 bytes)
-//   '\n'           ( 1 byte)
-// 30 bytes total
 
 #ifndef ORDER_FACTORY_H
 #define ORDER_FACTORY_H
 
 #include "communication_types.h"
 #include "protocol.h"
+#include "config.h"
 
 #include <random>
+#include <cmath>
+#include <algorithm>
 #include <cstring>
 
-namespace OrderFactory {
+class OrderFactory {
+public:
+    enum class FrameKind : uint8_t { NEW, CANCEL, MODIFY, GARBAGE, INVALID };
 
-enum class FrameKind : uint8_t { NEW, CANCEL, MODIFY, GARBAGE, INVALID };
+    // Pass a non-zero seed on the very first call to fix the RNG sequence.
+    // Subsequent calls ignore the argument and return the existing instance.
+    static OrderFactory& instance(uint64_t seed = 0) {
+        static OrderFactory inst(seed != 0 ? seed
+                                           : static_cast<uint64_t>(std::random_device{}()));
+        return inst;
+    }
 
-//=============================================================================
-// randomized order creation
-//=============================================================================
-inline InboundMessage make_new(const ClientId cid, std::mt19937& rng) {
-    static std::uniform_int_distribution<Price> price_dist{1, 10'000};
-    static std::uniform_int_distribution<Quantity> qty_dist {1, 1'000};
-    static std::uniform_int_distribution<int> side_dist {0, 1};
-    static std::uniform_int_distribution<int> type_dist {0, 1};
+    OrderFactory(const OrderFactory&)            = delete;
+    OrderFactory& operator=(const OrderFactory&) = delete;
+    OrderFactory(OrderFactory&&)                 = delete;
+    OrderFactory& operator=(OrderFactory&&)      = delete;
 
-    const auto order_type = static_cast<OrderType>(type_dist(rng));
-    return InboundMessage{
-        .client_id    = cid,
-        .order_id     = 0,
-        .price        = (order_type == OrderType::LIMIT) ? price_dist(rng) : Price{0},
-        .quantity     = qty_dist(rng),
-        .message_type = MessageType::NEW,
-        .side         = static_cast<Side>(side_dist(rng)),
-        .order_type   = order_type,
-        .padding      = 0,
-    };
-}
+    FrameKind build_frame(ClientId cid, OrderId active_order,
+                          char* dst, InboundMessage& msg_out);
 
-inline InboundMessage make_cancel(const ClientId cid, const OrderId target_oid) {
-    return InboundMessage{
-        .client_id    = cid,
-        .order_id     = target_oid,
-        .price        = 0,
-        .quantity     = 0,
-        .message_type = MessageType::CANCEL,
-        .side         = Side::BID,
-        .order_type   = OrderType::LIMIT,
-        .padding      = 0,
-    };
-}
+private:
+    explicit OrderFactory(uint64_t seed) : rng_(seed) {}
 
-inline InboundMessage make_modify(const ClientId cid, const OrderId target_oid, std::mt19937& rng) {
-    static std::uniform_int_distribution<Price> price_dist{1, 10'000};
-    static std::uniform_int_distribution<Quantity> qty_dist {1, 1'000};
-    static std::uniform_int_distribution<int> side_dist {0, 1};
+    // ---- RNG ----
+    std::mt19937_64 rng_;
 
-    return InboundMessage{
-        .client_id    = cid,
-        .order_id     = target_oid,
-        .price        = price_dist(rng),
-        .quantity     = qty_dist(rng),
-        .message_type = MessageType::MODIFY,
-        .side         = static_cast<Side>(side_dist(rng)),
-        .order_type   = OrderType::LIMIT,
-        .padding      = 0,
-    };
-}
+    // ---- distributions (in-class initializers use config macros) ----
+    std::normal_distribution<double>    log_return_dist_{0.0, MID_PRICE_VOL};
+    std::lognormal_distribution<double> qty_dist_{std::log(MEAN_QTY), QTY_VOL};
+    std::bernoulli_distribution         side_dist_{0.5};
+    std::bernoulli_distribution         type_dist_{0.5};
+    std::uniform_int_distribution<int>      roll_dist_    {0, 99};
+    std::uniform_int_distribution<uint8_t>  byte_dist_    {0, 255};
+    std::uniform_int_distribution<uint32_t> big_qty_dist_ {1'000'001u, 2'000'000u};
+    std::bernoulli_distribution             coin_         {0.5};
 
-inline InboundMessage make_invalid_body(const ClientId cid, std::mt19937& rng) {
-    static std::uniform_int_distribution<Price> coin {0, 1};
-    static std::uniform_int_distribution<Quantity> big_qty {1'000'001u, 2'000'000u};
+    // ---- mid-price state ----
+    double   mid_price_   = MID_PRICE_INITIAL;
+    uint32_t frame_count_ = 0;
 
-    if (coin(rng) == 0) {
+    // ---- helpers ----
+    // Reuses log_return_dist_ for the spread offset (avoids a second distribution).
+    inline Price limit_price(Side side) {
+        const double spread = std::abs(log_return_dist_(rng_)) * mid_price_;
+        const double raw    = (side == Side::BID) ? mid_price_ - spread
+                                                  : mid_price_ + spread;
+        return static_cast<Price>(std::max(1.0, raw));
+    }
+
+    inline Quantity order_qty() {
+        return static_cast<Quantity>(
+            std::clamp(qty_dist_(rng_), 1.0, 1'000'000.0));
+    }
+
+    inline InboundMessage make_new(ClientId cid) {
+        const auto side       = static_cast<Side>     (side_dist_(rng_));
+        const auto order_type = static_cast<OrderType>(type_dist_(rng_));
         return InboundMessage{
             .client_id    = cid,
             .order_id     = 0,
-            .price        = 0,         // LIMIT + price==0 → invalid
-            .quantity     = 100,
+            .price        = (order_type == OrderType::LIMIT) ? limit_price(side) : Price{0},
+            .quantity     = order_qty(),
+            .message_type = MessageType::NEW,
+            .side         = side,
+            .order_type   = order_type,
+        };
+    }
+
+    inline InboundMessage make_cancel(ClientId cid, OrderId target_oid) {
+        return InboundMessage{
+            .client_id    = cid,
+            .order_id     = target_oid,
+            .price        = 0,
+            .quantity     = 0,
+            .message_type = MessageType::CANCEL,
+            .side         = Side::BID,
+            .order_type   = OrderType::LIMIT,
+        };
+    }
+
+    inline InboundMessage make_modify(ClientId cid, OrderId target_oid) {
+        const auto side = static_cast<Side>(side_dist_(rng_));
+        return InboundMessage{
+            .client_id    = cid,
+            .order_id     = target_oid,
+            .price        = limit_price(side),
+            .quantity     = order_qty(),
+            .message_type = MessageType::MODIFY,
+            .side         = side,
+            .order_type   = OrderType::LIMIT,
+        };
+    }
+
+    inline InboundMessage make_invalid_body(ClientId cid) {
+        if (coin_(rng_)) {
+            return InboundMessage{
+                .client_id    = cid,
+                .order_id     = 0,
+                .price        = 0,       // LIMIT + price==0 → invalid
+                .quantity     = 100,
+                .message_type = MessageType::NEW,
+                .side         = Side::BID,
+                .order_type   = OrderType::LIMIT,
+            };
+        }
+        return InboundMessage{
+            .client_id    = cid,
+            .order_id     = 0,
+            .price        = 100,
+            .quantity     = big_qty_dist_(rng_),  // > 1 000 000 → invalid
             .message_type = MessageType::NEW,
             .side         = Side::BID,
             .order_type   = OrderType::LIMIT,
-            .padding      = 0,
         };
     }
-    return InboundMessage{
-        .client_id    = cid,
-        .order_id     = 0,
-        .price        = 100,
-        .quantity     = big_qty(rng), // > 1 000 000 → invalid
-        .message_type = MessageType::NEW,
-        .side         = Side::BID,
-        .order_type   = OrderType::LIMIT,
-        .padding      = 0,
-    };
-}
 
-//=============================================================================
-// buffer framing
-//=============================================================================
-inline void frame_message(const InboundMessage& msg, char *dst) {
-    constexpr size_t header_len = sizeof("EXCHANGE\n") - 1; // 9
-    std::memcpy(dst, "EXCHANGE\n", header_len);
-    std::memcpy(dst + header_len, &msg, sizeof(msg));
-    dst[header_len + sizeof(msg)] = '\n';
-}
+    static inline void frame_message(const InboundMessage& msg, char* dst) {
+        constexpr size_t hlen = sizeof("EXCHANGE\n") - 1;  // 9
+        std::memcpy(dst,         "EXCHANGE\n", hlen);
+        std::memcpy(dst + hlen,  &msg,         sizeof(msg));
+        dst[hlen + sizeof(msg)] = '\n';
+    }
+};
 
-inline FrameKind build_frame(const ClientId  cid, const OrderId active_order, char *dst,
-                             InboundMessage& msg_out,
-                             std::mt19937&   rng) {
-    static std::uniform_int_distribution<int>     roll     {0, 99};
-    static std::uniform_int_distribution<uint8_t> byte_dist{0, 255};
-    static std::uniform_int_distribution<int>     coin     {0, 1};
+inline OrderFactory::FrameKind OrderFactory::build_frame(
+        const ClientId cid, const OrderId active_order,
+        char* dst, InboundMessage& msg_out) {
 
-    const int r = roll(rng);
+    // GBM mid-price step every MID_PRICE_UPDATE_N frames.
+    // Bitmask requires MID_PRICE_UPDATE_N to be a power of two.
+    if ((++frame_count_ & (MID_PRICE_UPDATE_N - 1)) == 0)
+        mid_price_ *= std::exp(log_return_dist_(rng_));
+
+    const int r = roll_dist_(rng_);
     msg_out = {};
 
-    if (r > 40) {
-        msg_out = make_new(cid, rng);
+    if (r > 25) {
+        msg_out = make_new(cid);
         frame_message(msg_out, dst);
         return FrameKind::NEW;
     }
-
-    if (r > 15) {
+    if (r > 10) {
         msg_out = make_cancel(cid, active_order);
         frame_message(msg_out, dst);
         return FrameKind::CANCEL;
     }
-
-    if (r > 5) {
-        msg_out = make_modify(cid, active_order, rng);
+    if (r > 3) {
+        msg_out = make_modify(cid, active_order);
         frame_message(msg_out, dst);
         return FrameKind::MODIFY;
     }
-
-    if (coin(rng) == 0) {
-        for (size_t i = 0; i < INBOUND_BSIZE; ++i)
-            dst[i] = static_cast<char>(byte_dist(rng));
-        return FrameKind::GARBAGE;
+    if (coin_(rng_)) {
+        msg_out = make_invalid_body(cid);
+        frame_message(msg_out, dst);
+        return FrameKind::INVALID;
     }
-
-    msg_out = make_invalid_body(cid, rng);
-    frame_message(msg_out, dst);
-    return FrameKind::INVALID;
+    for (size_t i = 0; i < INBOUND_BSIZE; ++i)
+        dst[i] = static_cast<char>(byte_dist_(rng_));
+    return FrameKind::GARBAGE;
 }
-
-} // namespace OrderFactory
 
 #endif // ORDER_FACTORY_H

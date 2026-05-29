@@ -162,12 +162,11 @@ void Engine::executeRequest(const InboundMessage &msg) {
 }
 
 bool Engine::addOrder(OrderId id, const OrderRequest& order_request) {
-    Order order{id, order_request};
-
-    auto side = order_request.get_side();
-    auto price = order_request.get_price();
-
     if (orders_.contains(id)) return false;
+
+    Order order{id, order_request};
+    const auto side = order_request.get_side();
+    const auto price = order_request.get_price();
 
     if (side == Side::BID) {
         if (!bids_.contains(price)) {
@@ -211,11 +210,11 @@ void Engine::cancelOrder(const OrderId id) {
     orders_.erase(id);
 }
 
-bool Engine::modifyOrder(OrderId id, const OrderRequest& order_request) {
+bool Engine::modifyOrder(const OrderId id, const OrderRequest& order_request) {
     auto& order = orders_.at(id);
 
-    auto new_price = order_request.get_price();
-    auto new_quantity = order_request.get_quantity();
+    const auto new_price = order_request.get_price();
+    const auto new_quantity = order_request.get_quantity();
     if (new_price != order.price_ || new_quantity != order.initial_quantity_) {
         cancelOrder(id);
         return addOrder(id, order_request);
@@ -279,6 +278,9 @@ bool Engine::matchOrders() {
             bid.fill(fill_quantity);
             ask.fill(fill_quantity);
 
+            out_ring_.push(buy_msg);
+            out_ring_.push(ask_msg);
+
             // remove orders if filled
             if (bid.is_filled()) {
                 highest_bids.pop_front();
@@ -289,16 +291,13 @@ bool Engine::matchOrders() {
                 orders_.erase(ask_id);
             }
 
-            out_ring_.push(buy_msg);
-            out_ring_.push(ask_msg);
-
             #if LOGGING
             trades_ring_.push(trade);
             #endif
 
             // erase empty price levels and break to avoid dangling references
-            bool bid_level_done = highest_bids.empty();
-            bool ask_level_done = lowest_asks.empty();
+            const bool bid_level_done = highest_bids.empty();
+            const bool ask_level_done = lowest_asks.empty();
             if (bid_level_done) bids_.erase(bid_price);
             if (ask_level_done) asks_.erase(ask_price);
             if (bid_level_done || ask_level_done) break;

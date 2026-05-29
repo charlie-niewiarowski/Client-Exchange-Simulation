@@ -14,7 +14,6 @@
 #include <iostream>
 #include <fcntl.h>
 
-// Destructs at program exit, printing latency percentiles to stdout.
 static LatencyHandler latency_handler;
 
 #define ever (;;)
@@ -30,7 +29,9 @@ static int epoll_ctrl(int epoll_fd, int fd, int op, int target);
 //=============================================================================
 
 Server::Server(InboundRing& in, OutboundRing& out, std::atomic<bool>& stop)
-    : in_ring_(in), out_ring_(out), stop_(stop) {}
+    : in_ring_(in), out_ring_(out), stop_(stop) {
+    client_map_.reserve(256);
+}
 
 Server::~Server() {
     if (epoll_in_  != -1) close(epoll_in_);
@@ -129,19 +130,14 @@ void Server::handleRequests() {
     const EpollSocket listen_sock{std::move(socket_setup.value())};
 
     while (!stop_.load(std::memory_order_relaxed)) {
-        // Drain close_ring_ first so we never attempt to read a condemned fd.
-        {
-            int dead_fd{};
-            while (close_ring_.pop(dead_fd)) {
-                closeConnection(dead_fd);
-            }
-        }
+        handleDisconnectsInbound();
 
-        const int nfds = epoll_wait(epoll_in_, events_in_, MAX_CLIENTS, 0);
+        const int nfds = epoll_wait(epoll_in_, events_in_, MAX_CLIENTS, 1);
 
         if (nfds == -1) {
             if (errno == EINTR) continue;
             std::cerr << "epoll_wait error: " << strerror(errno) << std::endl;
+            stop_.store(true, std::memory_order_relaxed);
             return;
         }
 
@@ -150,78 +146,89 @@ void Server::handleRequests() {
 
             if (fd == listen_sock.get()) {
                 registerConnection(listen_sock.get());
-                continue;
             }
-
-            readAndProcessBytes(fd);
+            else {
+                readAndProcessBytes(fd);
+            }
         }
     }
 }
 
-std::optional<int> Server::registerConnection(const int listen_fd) {
+void Server::registerConnection(const int listen_fd) {
     const int client_fd = accept(listen_fd, nullptr, nullptr);
     if (client_fd == -1) {
         std::cerr << "accept error: " << strerror(errno) << std::endl;
-        return std::nullopt;
+        return;
     }
 
     EpollSocket client_sock{client_fd, epoll_in_};
 
     const int flags = fcntl(client_fd, F_GETFL, 0);
-    if (flags == -1) return std::nullopt;
+    if (flags == -1) return;
     fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
 
     if (epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_ADD, EPOLLIN) == -1) {
-        return std::nullopt;
+        return;
     }
 
-    info_map_[client_fd].emplace(std::move(client_sock));
+    // Clear condemned flags before publishing state so outbound never sees a
+    // stale condemned flag for a freshly accepted fd.
+    condemned_inbound_[client_fd].store(false, std::memory_order_relaxed);
+    condemned_outbound_[client_fd].store(false, std::memory_order_relaxed);
 
-    // Notify the outbound thread so it can set fd_to_info_[fd] before the
-    // first response needs to be sent.
-    register_ring_.push({client_fd, &(*info_map_[client_fd])});
-
-    return client_fd;
+    // outbound_map_ must be emplaced before inbound_map_ so that, when the
+    // first message flows through the engine rings and outbound routes it, the
+    // slot is guaranteed to be live.
+    outbound_map_[client_fd].emplace();
+    inbound_map_[client_fd].emplace(std::move(client_sock));
 }
 
 void Server::readAndProcessBytes(const int client_fd) {
-    if (!info_map_[client_fd].has_value()) return;
+    // Skip if inbound already condemned this fd (epoll may still fire for it
+    // on the current batch before the EPOLL_CTL_DEL takes effect).
+    if (condemned_inbound_[client_fd].load(std::memory_order_relaxed)) return;
+    if (condemned_outbound_[client_fd].load(std::memory_order_relaxed)) return;
 
-    ConnectionInfo& info{*info_map_[client_fd]};
-    readRequest(info);
+    auto& istate = inbound_map_[client_fd];
+    if (!istate.has_value()) return;
 
-    // readRequest may have called closeConnection (EOF), resetting the optional.
-    if (!info_map_[client_fd].has_value()) return;
-
-    processRequest(info);
+    if (readRequest(*istate)) return;
+    processRequest(*istate);
 }
 
-void Server::readRequest(ConnectionInfo& info) {
-    const int     client_fd{info.fd()};
-    ReadBuffer&   buf{info.read_buffer()};
-    const ssize_t n{buf.read_from(client_fd)};
+bool Server::readRequest(InboundState& state) {
+    const int client_fd = state.fd();
+    ReadBuffer& buf = state.read_buffer();
 
+    const ssize_t n = buf.read_from(client_fd);
     if (n == 0) {
-        closeConnection(client_fd);
+        // Peer closed. Remove from epoll_in_ immediately so this fd never
+        // appears in another epoll batch before outbound finishes cleanup.
+        epoll_ctl(epoll_in_, EPOLL_CTL_DEL, client_fd, nullptr);
+        condemned_inbound_[client_fd].store(true, std::memory_order_release);
+        return true;
     }
-    else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        // Hard read error -> route an error reply to the outbound thread.
-        error_ring_.push({client_fd, ServerError::SYSTEM_ERROR});
-        buf.clear();
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        // IO error: TCP connection is broken, sending an error response is
+        // impossible.  Condemn exactly like a clean close.
+        epoll_ctl(epoll_in_, EPOLL_CTL_DEL, client_fd, nullptr);
+        condemned_inbound_[client_fd].store(true, std::memory_order_release);
+        return true;
     }
-    // n > 0 or EAGAIN -> processRequest drains complete frames when ready.
+    return false;
 }
 
-void Server::processRequest(ConnectionInfo& info) {
-    ReadBuffer& buf{info.read_buffer()};
+void Server::processRequest(InboundState& state) {
+    ReadBuffer& buf = state.read_buffer();
+    const int   fd  = state.fd();
 
     while (buf.length() >= INBOUND_BSIZE) {
         const Timestamp recv_tsc = __rdtsc();
 
-        const char* data{buf.view().data()};
+        const char* data = buf.view().data();
         constexpr size_t header_len = sizeof("EXCHANGE\n") - 1;
         if (memcmp(data, "EXCHANGE\n", header_len) != 0) {
-            error_ring_.push({info.fd(), ServerError::MALFORMED_REQUEST});
+            error_channel_.push({fd, ServerError::MALFORMED_REQUEST});
             buf.advance(INBOUND_BSIZE);
             continue;
         }
@@ -232,24 +239,18 @@ void Server::processRequest(ConnectionInfo& info) {
         buf.advance(INBOUND_BSIZE);
 
         if (!validate_message(msg)) {
-            error_ring_.push({info.fd(), ServerError::INVALID_ORDER});
+            error_channel_.push({fd, ServerError::INVALID_ORDER});
             continue;
         }
 
-        // t2 -> server is handing the message to the engine ring.
         msg.server_push = __rdtsc();
-        info.set_inbound(msg);
+        state.set_inbound(msg);
 
-        // Register the ClientId -> ConnectionInfo* mapping on first sighting.
-        // store-release pairs with the outbound thread's load-acquire.
         const ClientId cid = msg.client_id;
-        if (cid < client_map_.size() &&
-            client_map_[cid].load(std::memory_order_relaxed) == nullptr) {
-            client_map_[cid].store(&(*info_map_[info.fd()]),
-                                   std::memory_order_release);
-        }
+        auto [it, inserted] = client_map_.try_emplace(cid, fd);
+        if (!inserted) it->second.store(fd, std::memory_order_relaxed);
 
-        while (!in_ring_.push(info.inbound())) {}
+        while (!in_ring_.push(state.inbound())) {}
     }
 }
 
@@ -259,11 +260,11 @@ void Server::processRequest(ConnectionInfo& info) {
 
 void Server::serveResponses() {
     while (!stop_.load(std::memory_order_relaxed)) {
+        handleDisconnectsOutbound();
         routeOutboundMessages();
         beginSends();
 
-        // EPOLLOUT events -> a previously blocked send can now proceed.
-        const int nfds = epoll_wait(epoll_out_, events_out_, MAX_CLIENTS, 0);
+        const int nfds = epoll_wait(epoll_out_, events_out_, MAX_CLIENTS, 1);
 
         if (nfds == -1 && errno != EINTR) {
             std::cerr << "epoll_wait error: " << strerror(errno) << std::endl;
@@ -273,14 +274,15 @@ void Server::serveResponses() {
         for (int i = 0; i < nfds; ++i) {
             const int fd = events_out_[i].data.fd;
 
-            if (fd < 0 || fd >= static_cast<int>(condemned_fds_.size())) continue;
-            if (condemned_fds_[fd] || !fd_to_info_[fd]) continue;
+            if (condemned_inbound_[fd].load(std::memory_order_relaxed)) continue;
 
-            ConnectionInfo& info = *fd_to_info_[fd];
-            sendResponse(info);
+            auto& ostate = outbound_map_[fd];
+            if (!ostate.has_value()) continue;
 
-            // If the partial send drained the buffer, deregister EPOLLOUT.
-            if (!condemned_fds_[fd] && info.write_buffer().remaining_to_send() == 0) {
+            OutboundState& out = *ostate;
+            if (sendResponse(fd, out)) {
+                condemnConnection(fd, false);
+            } else if (epollout_armed_[fd] && out.write_buffer().remaining_to_send() == 0) {
                 epoll_ctrl(epoll_out_, fd, EPOLL_CTL_DEL, EPOLLIN | EPOLLOUT);
                 epollout_armed_[fd] = false;
             }
@@ -289,43 +291,36 @@ void Server::serveResponses() {
 }
 
 void Server::routeOutboundMessages() {
-    // ===== 1. New connections (inbound -> outbound) =====
-    // Process these first so fd_to_info_ is populated before we need it below.
-    {
-        std::pair<int, ConnectionInfo*> reg{};
-        while (register_ring_.pop(reg)) {
-            fd_to_info_[reg.first]    = reg.second;
-            condemned_fds_[reg.first] = false;
-            epollout_armed_[reg.first] = false;
-        }
+    OutboundMessage msg{};
+    while (out_ring_.pop(msg)) {
+        const auto it = client_map_.find(msg.client_id);
+        if (it == client_map_.end()) continue;
+
+        const int fd = it->second.load(std::memory_order_relaxed);
+        if (fd <= 0) continue;
+        if (condemned_inbound_[fd].load(std::memory_order_relaxed)) continue;
+
+        auto& ostate = outbound_map_[fd];
+        if (!ostate.has_value()) continue;
+
+        ostate->push_outbound(msg);
+        writable_fds_.insert(fd);
     }
 
-    // ===== 2. Engine responses (out_ring_) =====
-    {
-        OutboundMessage msg{};
-        while (out_ring_.pop(msg)) {
-            const ClientId cid = msg.client_id;
-            if (cid >= client_map_.size()) continue;
+    // Drain inbound-generated errors (SPSC: inbound produces, we consume).
+    PendingError pe{};
+    while (error_channel_.pop(pe)) {
+        const int fd = pe.fd;
+        if (condemned_inbound_[fd].load(std::memory_order_relaxed)) continue;
 
-            ConnectionInfo* info = client_map_[cid].load(std::memory_order_acquire);
-            if (!info) continue;
+        auto& ostate = outbound_map_[fd];
+        if (!ostate.has_value()) continue;
 
-            info->push_outbound(msg);
-            writable_fds_.insert(info->fd());
-        }
-    }
-
-    // ===== 3. Error replies from the inbound thread (error_ring_) =====
-    {
-        ErrorRecord rec{};
-        while (error_ring_.pop(rec)) {
-            const int fd = rec.fd;
-            if (fd < 0 || fd >= static_cast<int>(fd_to_info_.size())) continue;
-            if (condemned_fds_[fd] || !fd_to_info_[fd]) continue;
-
-            fd_to_info_[fd]->push_outbound(OutboundMessage{.server_error = rec.err});
-            writable_fds_.insert(fd);
-        }
+        ostate->push_outbound(OutboundMessage{
+            .status       = Status::FAILURE,
+            .server_error = pe.err
+        });
+        writable_fds_.insert(fd);
     }
 }
 
@@ -333,29 +328,37 @@ void Server::beginSends() {
     for (auto it = writable_fds_.begin(); it != writable_fds_.end(); ) {
         const int fd = *it;
 
-        if (condemned_fds_[fd] || !fd_to_info_[fd]) {
+        if (condemned_inbound_[fd].load(std::memory_order_relaxed)) {
             it = writable_fds_.erase(it);
             continue;
         }
 
-        ConnectionInfo& info    = *fd_to_info_[fd];
-        WriteBuffer&    wbuf    = info.write_buffer();
-
-        // Fill the write buffer with as many queued messages as fit.
-        // This packs multiple responses into one send() syscall.
-        while (info.has_pending_outbound() && wbuf.has_room(OUTBOUND_BSIZE)) {
-            appendResponse(info);
-        }
-
-        // Send whatever is now in the buffer.
-        if (wbuf.remaining_to_send() > 0) {
-            sendResponse(info);
-        }
-
-        // Stay in writable_fds_ only if there is still work to do.
-        if (condemned_fds_[fd]) {
+        auto& ostate = outbound_map_[fd];
+        if (!ostate.has_value()) {
             it = writable_fds_.erase(it);
-        } else if (wbuf.remaining_to_send() == 0 && !info.has_pending_outbound()) {
+            continue;
+        }
+
+        OutboundState& out  = *ostate;
+        WriteBuffer& wbuf = out.write_buffer();
+
+        while (out.has_pending_outbound() && wbuf.has_room(OUTBOUND_BSIZE)) {
+            appendResponse(out);
+        }
+
+        if (wbuf.remaining_to_send() > 0) {
+            if (sendResponse(fd, out)) {
+                // Fatal send error: erase via iterator before condemning so
+                // condemnConnection's writable_fds_.erase(fd) is a harmless no-op.
+                it = writable_fds_.erase(it);
+                condemnConnection(fd, false);
+                continue;
+            }
+        }
+
+        if (condemned_inbound_[fd].load(std::memory_order_relaxed)) {
+            it = writable_fds_.erase(it);
+        } else if (wbuf.remaining_to_send() == 0 && !out.has_pending_outbound()) {
             it = writable_fds_.erase(it);
         } else {
             ++it;
@@ -363,21 +366,16 @@ void Server::beginSends() {
     }
 }
 
-// Pops one message from the outbound queue, serialises it as a fixed-size
-// OUTBOUND_BSIZE frame zero-padded to that size, and appends it to the write
-// buffer.  Saves a PendingLatency entry so finishBatch can record t6 later.
-/*static*/ void Server::appendResponse(ConnectionInfo& info) {
-    const OutboundMessage msg  = info.pop_outbound();
-    const Timestamp       t5   = __rdtsc();   // t5 -> dequeued and serialised
+void Server::appendResponse(OutboundState& out) {
+    const OutboundMessage msg = out.pop_outbound();
+    const Timestamp       t5  = __rdtsc();
 
-    // Build the fixed-size frame.  The array is zero-initialised so any bytes
-    // beyond the actual response are already padded with 0x00.
     char frame[OUTBOUND_BSIZE]{};
 
     if (msg.server_error == ServerError::NONE) {
         memcpy(frame, OK_STATUS, strlen(OK_STATUS));
-        memcpy(frame + strlen(OK_STATUS),                  &msg.client_id, sizeof(ClientId));
-        memcpy(frame + strlen(OK_STATUS) + sizeof(ClientId), &msg.order_id, sizeof(OrderId));
+        memcpy(frame + strlen(OK_STATUS),                    &msg.client_id, sizeof(ClientId));
+        memcpy(frame + strlen(OK_STATUS) + sizeof(ClientId), &msg.order_id,  sizeof(OrderId));
     }
     else {
         memcpy(frame, ERROR_STATUS, strlen(ERROR_STATUS));
@@ -386,46 +384,40 @@ void Server::beginSends() {
         frame[strlen(ERROR_STATUS) + err_str.size()] = '\n';
     }
 
-    info.write_buffer().append(frame, OUTBOUND_BSIZE);
+    out.write_buffer().append(frame, OUTBOUND_BSIZE);
 
-    // Only ACK responses (NEW / CANCEL / MODIFY) are tracked: their t1->t6
-    // spans measure deterministic service time.  MATCH messages are excluded
-    // because t1 belongs to the original order and includes queuing delay
-    // waiting for a counterparty.
     const bool record = (msg.server_error == ServerError::NONE &&
                          msg.message_type != MessageType::MATCH);
-    info.push_latency({
-        msg.recv_tsc,        msg.server_push_tsc,
-        msg.engine_pop_tsc,  msg.engine_push_tsc,
-        t5,                  record
+    out.push_latency({
+        msg.recv_tsc,       msg.server_push_tsc,
+        msg.engine_pop_tsc, msg.engine_push_tsc,
+        t5,                 record
     });
 }
 
-void Server::sendResponse(ConnectionInfo& info) {
-    WriteBuffer& wbuf    = info.write_buffer();
-    const int    fd      = info.fd();
-    const ssize_t n      = wbuf.write_to(fd);
+bool Server::sendResponse(const int fd, OutboundState& out) {
+    WriteBuffer& wbuf = out.write_buffer();
 
+    const ssize_t n = wbuf.write_to(fd);
     if (wbuf.remaining_to_send() == 0) {
-        // All bytes are in the kernel send buffer -> record latency and reset.
-        finishBatch(info);
+        finishBatch(out);
+        return false;
     }
-    else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        // Hard send error -> condemn; inbound thread will close the fd.
-        condemnConnection(fd);
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        return true;   // fatal — caller condemns
     }
-    else if (!epollout_armed_[fd]) {
-        // Partial send or EAGAIN -> arm EPOLLOUT to resume without busy-waiting.
-        epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT);
-        epollout_armed_[fd] = true;
+    if (!epollout_armed_[fd]) {
+        if (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0)
+            epollout_armed_[fd] = true;
     }
+    return false;
 }
 
-void Server::finishBatch(ConnectionInfo& info) const {
-    const Timestamp t6 = __rdtsc();   // t6 -> bytes are in the kernel send buffer
+void Server::finishBatch(OutboundState& out) const {
+    const Timestamp t6 = __rdtsc();
 
-    for (int i = 0; i < info.latency_count(); ++i) {
-        const PendingLatency& e = info.latency_entry(i);
+    for (int i = 0; i < out.latency_count(); ++i) {
+        const PendingLatency& e = out.latency_entry(i);
         if (e.record) {
             latency_handler.push_sample({
                 e.recv_tsc,       e.server_push_tsc,
@@ -435,41 +427,89 @@ void Server::finishBatch(ConnectionInfo& info) const {
         }
     }
 
-    info.clear_latency_batch();
-    info.write_buffer().try_reset();
+    out.clear_latency_batch();
+    out.write_buffer().try_reset();
 }
 
 //=============================================================================
-// condemnConnection  (outbound thread only)
+// handleDisconnects  — two-phase close protocol
 //=============================================================================
 
-void Server::condemnConnection(const int fd) {
-    condemned_fds_[fd]   = true;
-    fd_to_info_[fd]      = nullptr;
-    epollout_armed_[fd]  = false;
-    writable_fds_.erase(fd);
-    // Notify the inbound thread to close the fd and free the ConnectionInfo.
-    while (!close_ring_.push(fd)) {}
-}
+// Outbound thread: scan condemned_inbound_ (set by inbound or condemnConnection).
+// Clean up all outbound-private state for the fd, then signal inbound via
+// condemned_outbound_ (release) so it can safely reset inbound_map_ and close.
+void Server::handleDisconnectsOutbound() {
+    for (int fd = 0; fd < static_cast<int>(condemned_inbound_.size()); ++fd) {
+        if (!condemned_inbound_[fd].load(std::memory_order_acquire)) continue;
 
-//=============================================================================
-// closeConnection  (inbound thread only)
-//=============================================================================
+        auto& ostate = outbound_map_[fd];
+        if (!ostate.has_value()) continue;
 
-void Server::closeConnection(const int client_fd) {
-    if (!info_map_[client_fd].has_value()) return;
+        writable_fds_.erase(fd);
+        if (epollout_armed_[fd]) {
+            epoll_ctl(epoll_out_, EPOLL_CTL_DEL, fd, nullptr);
+            epollout_armed_[fd] = false;
+        }
+        ostate.reset();
 
-    const ClientId cid = info_map_[client_fd]->inbound().client_id;
-    // Clear the routing table so routeOutboundMessages skips this client_id.
-    // store-release pairs with the outbound thread's load-acquire.
-    if (cid > 0 && cid < client_map_.size()) {
-        client_map_[cid].store(nullptr, std::memory_order_release);
+        // Release: all outbound accesses to outbound_map_[fd] happen-before
+        // inbound's acquire of this flag, and therefore before its reset().
+        condemned_outbound_[fd].store(true, std::memory_order_release);
     }
+}
 
-    // Resetting the optional destructs ConnectionInfo -> destructs EpollSocket
-    // -> EPOLL_CTL_DEL on epoll_in_ then close(fd).
-    // close(fd) also implicitly removes the fd from epoll_out_.
-    info_map_[client_fd].reset();
+// Inbound thread: scan condemned_outbound_ (set by outbound or condemnConnection).
+// Acquire load ensures all outbound writes to outbound_map_[fd] are visible
+// here, so resetting inbound_map_[fd] (which closes the fd via EpollSocket
+// RAII) is safe.  Both flags are cleared last so the fd slot can be reused.
+void Server::handleDisconnectsInbound() {
+    for (int fd = 0; fd < static_cast<int>(condemned_outbound_.size()); ++fd) {
+        if (!condemned_outbound_[fd].load(std::memory_order_acquire)) continue;
+
+        auto& istate = inbound_map_[fd];
+        if (!istate.has_value()) continue;
+
+        // Clear the client_map_ routing entry atomically so in-flight outbound
+        // routing sees an invalid fd and skips rather than accessing freed state.
+        const ClientId cid = istate->client_id();
+        if (cid > 0) {
+            const auto map_it = client_map_.find(cid);
+            if (map_it != client_map_.end()) {
+                map_it->second.store(-1, std::memory_order_relaxed);
+            }
+        }
+
+        // Destructs EpollSocket: calls epoll_ctl(DEL, epoll_in_, fd) then close().
+        // The DEL is idempotent if condemnConnection(true) already removed it.
+        istate.reset();
+
+        // Reset flags last; registerConnection relies on seeing false here.
+        condemned_inbound_[fd].store(false, std::memory_order_relaxed);
+        condemned_outbound_[fd].store(false, std::memory_order_relaxed);
+    }
+}
+
+//=============================================================================
+// condemnConnection
+//=============================================================================
+
+void Server::condemnConnection(const int fd, const bool caller_inbound) {
+    if (caller_inbound) {
+        // Remove from epoll_in_ immediately so no future epoll batch includes fd.
+        // The EpollSocket destructor will attempt DEL again on istate.reset() but
+        // that is harmless (ENOENT).
+        epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, fd, 0);
+        condemned_inbound_[fd].store(true, std::memory_order_release);
+    } else {
+        // Outbound-initiated: clean up outbound-private state then signal inbound.
+        writable_fds_.erase(fd);
+        if (epollout_armed_[fd]) {
+            epoll_ctl(epoll_out_, EPOLL_CTL_DEL, fd, nullptr);
+            epollout_armed_[fd] = false;
+        }
+        outbound_map_[fd].reset();
+        condemned_outbound_[fd].store(true, std::memory_order_release);
+    }
 }
 
 //=============================================================================

@@ -15,16 +15,14 @@
 // Wire frame sizes
 //=============================================================================
 
-// Inbound frame: "EXCHANGE\n"(9) + InboundMessage(48) + '\n'(1) = 58 bytes.
-inline constexpr size_t INBOUND_BSIZE = sizeof("EXCHANGE\n") - 1
-                                      + sizeof(InboundMessage)
-                                      + 1;
+// Inbound frame: "EXCHANGE\n"(9) + InboundMessage(48) + '\n'(1) = 58 bytes + padding for cache alignment.
+inline constexpr size_t INBOUND_BSIZE = 64;
 
 // Outbound frame: fixed 64 bytes (cache-line aligned).
 //   OK    -> "EXCHANGE\nOK\n"(12) + ClientId(4) + OrderId(8)          = 24 bytes
 //   ERROR -> "EXCHANGE\nERROR\n"(15) + longest_error_str(17) + '\n'(1) = 33 bytes
 // Both fit comfortably; the remaining bytes are zero-padded by the sender.
-inline constexpr size_t OUTBOUND_BSIZE = 64;
+inline constexpr size_t OUTBOUND_BSIZE = 32;
 
 //=============================================================================
 // Status prefixes (server -> client)
@@ -37,7 +35,7 @@ inline constexpr size_t OUTBOUND_BSIZE = 64;
 // Per-connection outbound ring capacity (must be a power of two)
 //=============================================================================
 
-inline constexpr size_t RINGBUF_SIZE = 16;
+inline constexpr size_t RINGBUF_SIZE = 64;
 
 //=============================================================================
 // Error string helpers
@@ -45,7 +43,7 @@ inline constexpr size_t RINGBUF_SIZE = 16;
 
 constexpr std::string_view server_error_string(const ServerError error) {
     switch (error) {
-        case ServerError::MALFORMED_REQUEST: return "malformed request";
+        case ServerError::MALFORMED_REQUEST: return "malformed req";
         case ServerError::INVALID_ORDER:     return "invalid order";
         case ServerError::SYSTEM_ERROR:      return "system error";
         case ServerError::EXECUTION_ERROR:   return "execution error";

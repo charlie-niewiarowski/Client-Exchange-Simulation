@@ -12,109 +12,112 @@
 #include "config.h"
 
 #include <array>
-#include <algorithm>
 
 //=============================================================================
 // Buffer aliases
 //=============================================================================
 
-// Per-connection read buffer -> holds READ_BATCH_SIZE complete inbound frames.
-using ReadBuffer  = Buffer<READ_BATCH_SIZE  * INBOUND_BSIZE>;
-
-// Per-connection write buffer -> holds WRITE_BATCH_SIZE complete outbound frames.
-// Multiple serialised responses are appended here and sent in a single syscall.
+using ReadBuffer = Buffer<READ_BATCH_SIZE * INBOUND_BSIZE>;
 using WriteBuffer = Buffer<WRITE_BATCH_SIZE * OUTBOUND_BSIZE>;
+using StagingQueue = RingBuffer<OutboundMessage>;
 
-using OutboundQueue = RingBuffer<OutboundMessage>;
+//=============================================================================
+// PendingError  (SPSC channel element: inbound thread → outbound thread)
+//=============================================================================
+
+struct PendingError {
+    int fd;
+    ServerError err;
+};
 
 //=============================================================================
 // PendingLatency
 //=============================================================================
 
-// Holds the data needed to record one LatencySample once the write batch is
-// fully sent (t6).  Filled by appendResponse; drained by finishBatch.
-// record == false -> MATCH or error response; skip it.
 struct PendingLatency {
     Timestamp recv_tsc;
     Timestamp server_push_tsc;
     Timestamp engine_pop_tsc;
     Timestamp engine_push_tsc;
-    Timestamp server_pop;   // t5 -> message dequeued and serialised
-    bool      record;
+    Timestamp server_pop;
+    bool record;
 };
 
 //=============================================================================
-// ConnectionInfo
+// InboundState  (owned exclusively by the inbound thread)
 //=============================================================================
 //
-// Owns all per-connection state.  The two field groups below must be accessed
-// only from the thread that owns them.  Mixing threads is a data race.
+//   Lifetime: created in registerConnection; reset in handleDisconnectsInbound
+//   only after condemned_outbound_[fd] has been set (two-phase close).
 //
-//   Inbound thread  (handleRequests) -> reads socket, parses frames, pushes to engine ring
-//   Outbound thread (serveResponses) -> pops engine responses, fills write batches, sends
-//
-// The socket fd is read-only after construction; both threads may call fd().
+//   The outbound thread must never access this object.
 
-class ConnectionInfo {
+class InboundState {
 public:
-    explicit ConnectionInfo(EpollSocket sock)
-        : sock_(std::move(sock)) {}
+    explicit InboundState(EpollSocket sock) : sock_(std::move(sock)) {}
 
-    ConnectionInfo(const ConnectionInfo&)            = delete;
-    ConnectionInfo& operator=(const ConnectionInfo&) = delete;
-    ConnectionInfo(ConnectionInfo&&)                 = delete;
-    ConnectionInfo& operator=(ConnectionInfo&&)      = delete;
+    InboundState(const InboundState&) = delete;
+    InboundState& operator=(const InboundState&) = delete;
+    InboundState(InboundState&&) = delete;
+    InboundState& operator=(InboundState&&) = delete;
 
-    ~ConnectionInfo() = default;
-
-    //===== shared (read-only after construction) =====
+    ~InboundState() = default;
 
     [[nodiscard]] int fd() const { return sock_.get(); }
-
-    //===== inbound thread =====
-    // read_buf_ and inbound_ are touched only by handleRequests.
 
     ReadBuffer& read_buffer() { return read_buf_; }
 
     [[nodiscard]] const InboundMessage& inbound() const { return inbound_; }
-    void set_inbound(const InboundMessage& m)           { inbound_ = m; }
+    void set_inbound(const InboundMessage& m) { inbound_ = m; }
 
-    //===== outbound thread =====
-    // Everything below is touched only by serveResponses.
+    [[nodiscard]] ClientId client_id() const { return inbound_.client_id; }
+
+private:
+    const EpollSocket sock_;
+    ReadBuffer read_buf_;
+    InboundMessage inbound_{};
+};
+
+//=============================================================================
+// OutboundState  (owned exclusively by the outbound thread)
+//=============================================================================
+//
+//   Lifetime: created in registerConnection by inbound (safe: the happens-
+//   before chain through the engine rings guarantees outbound sees it before
+//   it first accesses the slot); reset by outbound in handleDisconnectsOutbound.
+//
+//   The inbound thread must never access this object after construction.
+
+class OutboundState {
+public:
+    OutboundState() = default;
+
+    OutboundState(const OutboundState&) = delete;
+    OutboundState& operator=(const OutboundState&) = delete;
+    OutboundState(OutboundState&&) = delete;
+    OutboundState& operator=(OutboundState&&) = delete;
+
+    ~OutboundState() = default;
 
     WriteBuffer& write_buffer() { return write_buf_; }
 
-    // Per-connection queue of engine responses waiting to be serialised.
-    // Pushed by routeOutboundMessages; popped by appendResponse.
-    void            push_outbound(const OutboundMessage& msg) { outbound_.push(msg); }
+    void push_outbound(const OutboundMessage& msg) { staging_.push(msg); }
     OutboundMessage pop_outbound();
-    [[nodiscard]] bool has_pending_outbound() const { return !outbound_.empty(); }
-
-    //===== latency batch (outbound thread) =====
-    // appendResponse fills one slot per serialised message.
-    // finishBatch records all filled slots (setting t6) then clears the array.
+    [[nodiscard]] bool has_pending_outbound() const { return !staging_.empty(); }
 
     void push_latency(const PendingLatency& e) {
         if (latency_count_ < static_cast<int>(latency_batch_.size()))
             latency_batch_[latency_count_++] = e;
     }
-    [[nodiscard]] int                   latency_count()            const { return latency_count_; }
-    [[nodiscard]] const PendingLatency& latency_entry(const int i) const { return latency_batch_[i]; }
+    [[nodiscard]] int latency_count() const { return latency_count_; }
+    [[nodiscard]] const PendingLatency& latency_entry(int i) const { return latency_batch_[i]; }
     void clear_latency_batch() { latency_count_ = 0; }
 
 private:
-    //===== shared (read-only after construction) =====
-    const EpollSocket sock_;
+    WriteBuffer write_buf_;
+    // Single-threaded staging buffer; StagingQueue's atomics have no contention.
+    StagingQueue staging_{RINGBUF_SIZE};
 
-    //===== inbound thread =====
-    ReadBuffer     read_buf_;
-    InboundMessage inbound_{};
-
-    //===== outbound thread =====
-    WriteBuffer   write_buf_;
-    OutboundQueue outbound_{RINGBUF_SIZE};
-
-    // One slot per message appended to the current write batch.
     std::array<PendingLatency, WRITE_BATCH_SIZE> latency_batch_{};
     int latency_count_{0};
 };

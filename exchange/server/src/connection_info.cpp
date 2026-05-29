@@ -4,10 +4,8 @@
 
 #include "../include/connection_info.h"
 
-#include <cstring>
-
-OutboundMessage ConnectionInfo::pop_outbound() {
+OutboundMessage OutboundState::pop_outbound() {
     OutboundMessage msg{};
-    outbound_.pop(msg);
+    staging_.pop(msg);
     return msg;
 }
