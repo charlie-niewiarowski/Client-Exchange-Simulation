@@ -32,6 +32,19 @@ struct ClientState {
     //===== pipelining =====
     uint32_t acks_pending = 0;  // frames sent but not yet responded to
 
+    // Pending request types: FIFO ring parallel to the in-flight pipeline.
+    // pending_tail advances on every send; pending_head on every ACK consumed.
+    MessageType pending_types[PIPELINE_DEPTH]{};
+    uint32_t    pending_head = 0;
+    uint32_t    pending_tail = 0;
+
+    // Active order ring: order IDs from NEW ACKs, used as CANCEL/MODIFY targets.
+    // active_write/active_count track the write side; active_read cycles reads.
+    OrderId  active_orders[MAX_ACTIVE_ORDERS]{};
+    uint32_t active_write = 0;
+    uint32_t active_count = 0;
+    uint32_t active_read  = 0;
+
     //===== stats =====
     uint64_t requests_sent = 0;
     uint64_t responses_ack = 0;

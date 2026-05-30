@@ -68,7 +68,7 @@ void LoadGenerator::run() {
     for (auto& cs : clients_) connectClient(cs);
 
     while (running_.load(std::memory_order_relaxed)) {
-        const int nfds = epoll_wait(epoll_fd_, events_, CLIENT_EPOLL_BATCH, 0);
+        const int nfds = epoll_wait(epoll_fd_, events_, CLIENT_EPOLL_BATCH, -1);
         if (nfds == -1) {
             if (errno == EINTR) continue;
             std::fprintf(stderr, "epoll_wait: %s\n", std::strerror(errno));
@@ -121,12 +121,17 @@ bool LoadGenerator::connectClient(ClientState& cs) {
     addr.sin_port   = htons(EXCHANGE_PORT);
     inet_pton(AF_INET, EXCHANGE_HOST, &addr.sin_addr);
 
-    cs.fd          = fd;
-    cs.connecting  = true;
-    cs.write_len   = 0;
-    cs.write_off   = 0;
-    cs.read_len    = 0;
+    cs.fd           = fd;
+    cs.connecting   = true;
+    cs.write_len    = 0;
+    cs.write_off    = 0;
+    cs.read_len     = 0;
     cs.acks_pending = 0;
+    cs.pending_head = 0;
+    cs.pending_tail = 0;
+    cs.active_write = 0;
+    cs.active_count = 0;
+    cs.active_read  = 0;
 
     const int rc = connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
 
@@ -193,6 +198,18 @@ void LoadGenerator::handleReadable(ClientState& cs) {
         const char type = frame[9];   // 'O' = OK, 'E' = ERROR
         if (type == 'O') {
             if (cs.acks_pending > 0) {
+                // Consume the matching pending type to learn what request this ACK is for.
+                const MessageType sent_type =
+                    cs.pending_types[cs.pending_head % PIPELINE_DEPTH];
+                ++cs.pending_head;
+                // NEW ACKs carry the exchange-assigned order_id; store it for
+                // future CANCEL/MODIFY targeting.
+                if (sent_type == MessageType::NEW) {
+                    OrderId oid; std::memcpy(&oid, frame + 16, sizeof(oid));
+                    cs.active_orders[cs.active_write % MAX_ACTIVE_ORDERS] = oid;
+                    ++cs.active_write;
+                    if (cs.active_count < MAX_ACTIVE_ORDERS) ++cs.active_count;
+                }
                 --cs.acks_pending;
                 --cs.orders_in_flight;
                 ++cs.responses_ack;
@@ -218,7 +235,11 @@ void LoadGenerator::handleReadable(ClientState& cs) {
                 #endif
             }
         } else if (type == 'E') {
-            if (cs.acks_pending > 0) { --cs.acks_pending; --cs.orders_in_flight; }
+            if (cs.acks_pending > 0) {
+                ++cs.pending_head;  // keep pending ring in sync with acks_pending
+                --cs.acks_pending;
+                --cs.orders_in_flight;
+            }
             ++cs.responses_err;
             #if LOGGING
             {
@@ -265,7 +286,16 @@ void LoadGenerator::buildBatch(ClientState& cs) {
     cs.write_len = 0;
     while (cs.acks_pending < PIPELINE_DEPTH) {
         InboundMessage msg{};
-        factory.build_frame(cs.client_id, 0, cs.write_buf + cs.write_len, msg);
+        const OrderId active_oid = (cs.active_count > 0)
+            ? cs.active_orders[cs.active_read % MAX_ACTIVE_ORDERS]
+            : 0;
+        factory.build_frame(cs.client_id, active_oid, cs.write_buf + cs.write_len, msg);
+        // Advance the read cursor only for CANCEL/MODIFY so each targets a fresh slot.
+        if (msg.message_type == MessageType::CANCEL ||
+            msg.message_type == MessageType::MODIFY)
+            ++cs.active_read;
+        cs.pending_types[cs.pending_tail % PIPELINE_DEPTH] = msg.message_type;
+        ++cs.pending_tail;
         cs.write_len    += INBOUND_BSIZE;
         ++cs.acks_pending;
         ++cs.requests_sent;

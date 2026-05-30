@@ -34,7 +34,7 @@
 //   [OK]    cid:<id>  oid:<oid>          — ACK for a sent request
 //   [MATCH] cid:<id>  oid:<oid>          — fill notification (unsolicited OK)
 //   [ERR]   cid:<id>  :: <error string>  — server-side error
-#define LOGGING 0
+#define LOGGING 1
 
 // open-loop rate cap: aggregate orders / second across ALL clients.
 // The orchestrator divides this evenly so each client's inter-arrival time is

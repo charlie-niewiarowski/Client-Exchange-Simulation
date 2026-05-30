@@ -66,24 +66,24 @@ private:
     std::bernoulli_distribution             coin_         {0.5};
 
     // ---- mid-price state ----
-    double   mid_price_   = MID_PRICE_INITIAL;
+    double mid_price_   = MID_PRICE_INITIAL;
     uint32_t frame_count_ = 0;
 
     // ---- helpers ----
     // Reuses log_return_dist_ for the spread offset (avoids a second distribution).
-    inline Price limit_price(Side side) {
+    Price limit_price(Side side) {
         const double spread = std::abs(log_return_dist_(rng_)) * mid_price_;
         const double raw    = (side == Side::BID) ? mid_price_ - spread
                                                   : mid_price_ + spread;
         return static_cast<Price>(std::max(1.0, raw));
     }
 
-    inline Quantity order_qty() {
+    Quantity order_qty() {
         return static_cast<Quantity>(
             std::clamp(qty_dist_(rng_), 1.0, 1'000'000.0));
     }
 
-    inline InboundMessage make_new(ClientId cid) {
+    InboundMessage make_new(ClientId cid) {
         const auto side       = static_cast<Side>     (side_dist_(rng_));
         const auto order_type = static_cast<OrderType>(type_dist_(rng_));
         return InboundMessage{
@@ -97,7 +97,7 @@ private:
         };
     }
 
-    inline InboundMessage make_cancel(ClientId cid, OrderId target_oid) {
+    InboundMessage make_cancel(ClientId cid, OrderId target_oid) {
         return InboundMessage{
             .client_id    = cid,
             .order_id     = target_oid,
@@ -109,7 +109,7 @@ private:
         };
     }
 
-    inline InboundMessage make_modify(ClientId cid, OrderId target_oid) {
+    InboundMessage make_modify(ClientId cid, OrderId target_oid) {
         const auto side = static_cast<Side>(side_dist_(rng_));
         return InboundMessage{
             .client_id    = cid,
@@ -122,7 +122,7 @@ private:
         };
     }
 
-    inline InboundMessage make_invalid_body(ClientId cid) {
+    InboundMessage make_invalid_body(ClientId cid) {
         if (coin_(rng_)) {
             return InboundMessage{
                 .client_id    = cid,
@@ -145,7 +145,7 @@ private:
         };
     }
 
-    static inline void frame_message(const InboundMessage& msg, char* dst) {
+    static void frame_message(const InboundMessage& msg, char* dst) {
         constexpr size_t hlen = sizeof("EXCHANGE\n") - 1;  // 9
         std::memcpy(dst,         "EXCHANGE\n", hlen);
         std::memcpy(dst + hlen,  &msg,         sizeof(msg));
@@ -153,7 +153,7 @@ private:
     }
 };
 
-inline OrderFactory::FrameKind OrderFactory::build_frame(
+OrderFactory::FrameKind OrderFactory::build_frame(
         const ClientId cid, const OrderId active_order,
         char* dst, InboundMessage& msg_out) {
 
@@ -165,21 +165,23 @@ inline OrderFactory::FrameKind OrderFactory::build_frame(
     const int r = roll_dist_(rng_);
     msg_out = {};
 
-    if (r > 25) {
+    if (r > 20) {
         msg_out = make_new(cid);
         frame_message(msg_out, dst);
         return FrameKind::NEW;
     }
-    if (r > 10) {
+    if (r > 8) {
         msg_out = make_cancel(cid, active_order);
         frame_message(msg_out, dst);
         return FrameKind::CANCEL;
     }
-    if (r > 3) {
+    if (r >= INT_MIN) {
         msg_out = make_modify(cid, active_order);
         frame_message(msg_out, dst);
         return FrameKind::MODIFY;
     }
+
+    /*
     if (coin_(rng_)) {
         msg_out = make_invalid_body(cid);
         frame_message(msg_out, dst);
@@ -188,6 +190,7 @@ inline OrderFactory::FrameKind OrderFactory::build_frame(
     for (size_t i = 0; i < INBOUND_BSIZE; ++i)
         dst[i] = static_cast<char>(byte_dist_(rng_));
     return FrameKind::GARBAGE;
+    */
 }
 
 #endif // ORDER_FACTORY_H

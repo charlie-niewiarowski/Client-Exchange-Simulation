@@ -45,12 +45,30 @@ Server::~Server() {
 void Server::run() {
     if (!setupEpoll()) return;
 
+    #if DIAGNOSTICS
+    static std::mutex print_mux;
+    #endif
+
     inbound_thread_ = std::jthread([&]() {
+        #if DIAGNOSTICS
+        {
+            std::lock_guard lock(print_mux);
+            std::cout << "inbound thread: " << gettid() << "\n";
+        }
+        #endif
+
         pin_to_core(INBOUND_CORE);
         handleRequests();
     });
 
     outbound_thread_ = std::jthread([&]() {
+        #if DIAGNOSTICS
+        {
+            std::lock_guard lock(print_mux);
+            std::cout << "outbound thread: " << gettid() << "\n";
+        }
+        #endif
+
         pin_to_core(OUTBOUND_CORE);
         serveResponses();
     });
@@ -110,6 +128,10 @@ std::optional<EpollSocket> Server::setupListenSocket() const {
         return std::nullopt;
     }
 
+    const int flags = fcntl(raw_fd, F_GETFL, 0);
+    if (flags == -1) return std::nullopt;
+    fcntl(raw_fd, F_SETFL, flags | O_NONBLOCK);
+
     if (epoll_ctrl(epoll_in_, raw_fd, EPOLL_CTL_ADD, EPOLLIN) == -1) {
         return std::nullopt;
     }
@@ -132,7 +154,7 @@ void Server::handleRequests() {
     while (!stop_.load(std::memory_order_relaxed)) {
         handleDisconnectsInbound();
 
-        const int nfds = epoll_wait(epoll_in_, events_in_, MAX_CLIENTS, 1);
+        const int nfds = epoll_wait(epoll_in_, events_in_, MAX_CLIENTS, 0);
 
         if (nfds == -1) {
             if (errno == EINTR) continue;
@@ -145,7 +167,11 @@ void Server::handleRequests() {
             const int fd = events_in_[i].data.fd;
 
             if (fd == listen_sock.get()) {
-                registerConnection(listen_sock.get());
+                registerConnections(listen_sock.get());
+            }
+            else if (events_in_[i].events & (EPOLLRDHUP | EPOLLHUP)) {
+                epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, fd, 0);
+                condemned_inbound_[fd].store(true, std::memory_order_release);
             }
             else {
                 readAndProcessBytes(fd);
@@ -154,33 +180,30 @@ void Server::handleRequests() {
     }
 }
 
-void Server::registerConnection(const int listen_fd) {
-    const int client_fd = accept(listen_fd, nullptr, nullptr);
-    if (client_fd == -1) {
-        std::cerr << "accept error: " << strerror(errno) << std::endl;
-        return;
+void Server::registerConnections(const int listen_fd) {
+    int client_fd{-1};
+    while ((client_fd = accept(listen_fd, nullptr, nullptr)) != -1) {
+        EpollSocket client_sock{client_fd, epoll_in_};
+
+        const int flags = fcntl(client_fd, F_GETFL, 0);
+        if (flags == -1) return;
+        fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
+        if (epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLRDHUP) == -1) {
+            return;
+        }
+
+        // Clear condemned flags before publishing state so outbound never sees a
+        // stale condemned flag for a freshly accepted fd.
+        condemned_inbound_[client_fd].store(false, std::memory_order_relaxed);
+        condemned_outbound_[client_fd].store(false, std::memory_order_relaxed);
+
+        // outbound_map_ must be emplaced before inbound_map_ so that, when the
+        // first message flows through the engine rings and outbound routes it, the
+        // slot is guaranteed to be live.
+        outbound_map_[client_fd].emplace();
+        inbound_map_[client_fd].emplace(std::move(client_sock));
     }
-
-    EpollSocket client_sock{client_fd, epoll_in_};
-
-    const int flags = fcntl(client_fd, F_GETFL, 0);
-    if (flags == -1) return;
-    fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-
-    if (epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_ADD, EPOLLIN) == -1) {
-        return;
-    }
-
-    // Clear condemned flags before publishing state so outbound never sees a
-    // stale condemned flag for a freshly accepted fd.
-    condemned_inbound_[client_fd].store(false, std::memory_order_relaxed);
-    condemned_outbound_[client_fd].store(false, std::memory_order_relaxed);
-
-    // outbound_map_ must be emplaced before inbound_map_ so that, when the
-    // first message flows through the engine rings and outbound routes it, the
-    // slot is guaranteed to be live.
-    outbound_map_[client_fd].emplace();
-    inbound_map_[client_fd].emplace(std::move(client_sock));
 }
 
 void Server::readAndProcessBytes(const int client_fd) {
@@ -200,27 +223,27 @@ bool Server::readRequest(InboundState& state) {
     const int client_fd = state.fd();
     ReadBuffer& buf = state.read_buffer();
 
-    const ssize_t n = buf.read_from(client_fd);
-    if (n == 0) {
-        // Peer closed. Remove from epoll_in_ immediately so this fd never
-        // appears in another epoll batch before outbound finishes cleanup.
-        epoll_ctl(epoll_in_, EPOLL_CTL_DEL, client_fd, nullptr);
-        condemned_inbound_[client_fd].store(true, std::memory_order_release);
-        return true;
+    while (buf.remaining_capacity() > 0) {
+        const ssize_t n = buf.read_from(client_fd);
+
+        if (n == 0) {
+            epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, client_fd, 0);
+            condemned_inbound_[client_fd].store(true, std::memory_order_release);
+            return true;
+        }
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, client_fd, 0);
+            condemned_inbound_[client_fd].store(true, std::memory_order_release);
+            return true;
+        }
     }
-    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        // IO error: TCP connection is broken, sending an error response is
-        // impossible.  Condemn exactly like a clean close.
-        epoll_ctl(epoll_in_, EPOLL_CTL_DEL, client_fd, nullptr);
-        condemned_inbound_[client_fd].store(true, std::memory_order_release);
-        return true;
-    }
+
     return false;
 }
 
 void Server::processRequest(InboundState& state) {
     ReadBuffer& buf = state.read_buffer();
-    const int   fd  = state.fd();
+    const int fd = state.fd();
 
     while (buf.length() >= INBOUND_BSIZE) {
         const Timestamp recv_tsc = __rdtsc();
@@ -264,7 +287,7 @@ void Server::serveResponses() {
         routeOutboundMessages();
         beginSends();
 
-        const int nfds = epoll_wait(epoll_out_, events_out_, MAX_CLIENTS, 1);
+        const int nfds = epoll_wait(epoll_out_, events_out_, MAX_CLIENTS, 0);
 
         if (nfds == -1 && errno != EINTR) {
             std::cerr << "epoll_wait error: " << strerror(errno) << std::endl;
@@ -276,15 +299,21 @@ void Server::serveResponses() {
 
             if (condemned_inbound_[fd].load(std::memory_order_relaxed)) continue;
 
-            auto& ostate = outbound_map_[fd];
-            if (!ostate.has_value()) continue;
-
-            OutboundState& out = *ostate;
-            if (sendResponse(fd, out)) {
+            if (events_in_[i].events & (EPOLLRDHUP || EPOLLHUP)) {
+                if (writable_fds_.contains(fd)) writable_fds_.erase(fd);
                 condemnConnection(fd, false);
-            } else if (epollout_armed_[fd] && out.write_buffer().remaining_to_send() == 0) {
-                epoll_ctrl(epoll_out_, fd, EPOLL_CTL_DEL, EPOLLIN | EPOLLOUT);
-                epollout_armed_[fd] = false;
+            }
+            else {
+                auto& ostate = outbound_map_[fd];
+                if (!ostate.has_value()) continue;
+
+                OutboundState& out = *ostate;
+                if (sendResponse(fd, out)) {
+                    condemnConnection(fd, false);
+                } else if (epollout_armed_[fd] && out.write_buffer().remaining_to_send() == 0) {
+                    epoll_ctrl(epoll_out_, fd, EPOLL_CTL_DEL, EPOLLIN | EPOLLOUT);
+                    epollout_armed_[fd] = false;
+                }
             }
         }
     }
@@ -368,7 +397,7 @@ void Server::beginSends() {
 
 void Server::appendResponse(OutboundState& out) {
     const OutboundMessage msg = out.pop_outbound();
-    const Timestamp       t5  = __rdtsc();
+    const Timestamp t5 = __rdtsc();
 
     char frame[OUTBOUND_BSIZE]{};
 
@@ -447,7 +476,7 @@ void Server::handleDisconnectsOutbound() {
 
         writable_fds_.erase(fd);
         if (epollout_armed_[fd]) {
-            epoll_ctl(epoll_out_, EPOLL_CTL_DEL, fd, nullptr);
+            epoll_ctrl(epoll_out_, EPOLL_CTL_DEL, fd, 0);
             epollout_armed_[fd] = false;
         }
         ostate.reset();
@@ -504,7 +533,7 @@ void Server::condemnConnection(const int fd, const bool caller_inbound) {
         // Outbound-initiated: clean up outbound-private state then signal inbound.
         writable_fds_.erase(fd);
         if (epollout_armed_[fd]) {
-            epoll_ctl(epoll_out_, EPOLL_CTL_DEL, fd, nullptr);
+            epoll_ctrl(epoll_out_, EPOLL_CTL_DEL, fd, 0);
             epollout_armed_[fd] = false;
         }
         outbound_map_[fd].reset();

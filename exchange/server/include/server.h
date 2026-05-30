@@ -5,7 +5,7 @@
 #ifndef TOYEXCHANGE_ORDERGATEWAY_HPP
 #define TOYEXCHANGE_ORDERGATEWAY_HPP
 
-#include "connection_info.h"
+ #include "connection_info.h"
 #include "communication_types.h"
 #include "config.h"
 #include "ring_buffer.hpp"
@@ -42,14 +42,9 @@ private:
     std::jthread outbound_thread_;
 
     //===== connection state =====
-    // inbound_map_  : sole owner is the inbound thread.
-    // outbound_map_ : sole owner is the outbound thread (created by inbound,
-    //                 but only accessed by outbound after the first ring push).
     std::array<std::optional<InboundState>,  MAX_CLIENTS + 10> inbound_map_{};
     std::array<std::optional<OutboundState>, MAX_CLIENTS + 10> outbound_map_{};
 
-    // ClientId → fd routing: outbound loads fd, checks condemned_inbound_[fd],
-    // then accesses outbound_map_[fd].
     std::unordered_map<ClientId, std::atomic<int>> client_map_;
 
     // Two-phase close flags.
@@ -89,7 +84,7 @@ private:
 
     //===== handleRequests (inbound thread) =====
     void handleRequests();
-    void registerConnection(int listen_fd);
+    void registerConnections(int listen_fd);
     void readAndProcessBytes(int client_fd);
     // Returns true if a disconnect was detected (condemned_inbound_ set).
     bool readRequest(InboundState& state);

@@ -75,9 +75,6 @@ int main(const int argc, char* argv[]) {
         EXCHANGE_HOST, EXCHANGE_PORT);
     #endif
 
-
-
-
     struct sigaction sa{};
     sa.sa_handler = on_signal;
     sigaction(SIGINT,  &sa, nullptr);

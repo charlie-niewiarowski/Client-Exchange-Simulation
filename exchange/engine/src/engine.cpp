@@ -162,6 +162,10 @@ void Engine::executeRequest(const InboundMessage &msg) {
 }
 
 bool Engine::addOrder(OrderId id, const OrderRequest& order_request) {
+    if (order_request.get_type() == OrderType::MARKET) {
+        return matchMarket(id, order_request);
+    }
+
     if (orders_.contains(id)) return false;
 
     Order order{id, order_request};
@@ -221,6 +225,10 @@ bool Engine::modifyOrder(const OrderId id, const OrderRequest& order_request) {
     }
 
     order = Order{id, order_request};
+    if (order_request.get_type() == OrderType::MARKET) {
+        return matchMarket(id, order_request);
+    }
+
     return matchOrders();
 }
 
@@ -241,9 +249,7 @@ bool Engine::matchOrders() {
             auto& ask = orders_.at(ask_id);
 
             // LIMIT orders only fill when prices cross; MARKET orders fill at any price
-            bool either_market = bid.order_type_ == OrderType::MARKET || ask.order_type_ == OrderType::MARKET;
-            bool prices_cross  = bid.price_ >= ask.price_;
-            if (!either_market && !prices_cross) break;
+            if (bid_price < ask_price) break;
 
             level_matched = true;
             any_filled = true;
@@ -271,6 +277,7 @@ bool Engine::matchOrders() {
                 .engine_pop_tsc = ask.engine_pop_tsc,
                 .client_id     = ask.client_id_,
                 .order_id      = ask.id_,
+                
                 .message_type  = MessageType::MATCH,
                 .status        = Status::SUCCESS
             };
@@ -307,6 +314,108 @@ bool Engine::matchOrders() {
     }
 
     return any_filled;
+}
+
+bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
+    auto remaining{order_request.get_quantity()};
+    
+    if (order_request.get_side() == Side::BID) {
+        while (!asks_.empty() && remaining > 0) {
+            auto& [ask_price, lowest_asks] = *asks_.begin();
+
+            if (lowest_asks.empty()) return false;
+
+            auto ask_id = lowest_asks.front();
+            auto& ask = orders_.at(ask_id);
+
+            auto fill_quantity = std::min(remaining, ask.remaining_quantity_);
+
+            OutboundMessage market_msg{
+                .recv_tsc      = order_request.get_recv_tsc(),
+                .engine_pop_tsc = order_request.get_engine_in_tsc(),
+                .client_id     = order_request.get_clientId(),
+                .order_id      = id,
+                .message_type  = MessageType::MATCH,
+                .status        = Status::SUCCESS
+            };
+            OutboundMessage ask_msg{
+                .recv_tsc      = ask.recv_tsc,
+                .engine_pop_tsc = ask.engine_pop_tsc,
+                .client_id     = ask.client_id_,
+                .order_id      = ask.id_,
+                .message_type  = MessageType::MATCH,
+                .status        = Status::SUCCESS
+            };
+
+            remaining -= fill_quantity;
+            ask.fill(fill_quantity);
+
+            out_ring_.push(market_msg);
+            out_ring_.push(ask_msg);
+
+            // remove orders if filled
+            if (ask.is_filled()) {
+                lowest_asks.pop_front();
+                orders_.erase(ask_id);
+            }
+
+            #if LOGGING
+            trades_ring_.push(trade);
+            #endif
+            
+            if (lowest_asks.empty()) asks_.erase(ask_price);
+        }
+    }
+    else if (order_request.get_side() == Side::ASK) {
+        while (!bids_.empty() && remaining > 0) {
+            auto& [bid_price, lowest_bids] = *bids_.begin();
+
+            if (lowest_bids.empty()) return false;
+
+
+            auto bid_id = lowest_bids.front();
+            auto& bid = orders_.at(bid_id);
+
+            auto fill_quantity = std::min(remaining, bid.remaining_quantity_);
+
+            OutboundMessage market_msg{
+                .recv_tsc      = order_request.get_recv_tsc(),
+                .engine_pop_tsc = order_request.get_engine_in_tsc(),
+                .client_id     = order_request.get_clientId(),
+                .order_id      = id,
+                .message_type  = MessageType::MATCH,
+                .status        = Status::SUCCESS
+            };
+            OutboundMessage ask_msg{
+                .recv_tsc      = bid.recv_tsc,
+                .engine_pop_tsc = bid.engine_pop_tsc,
+                .client_id     = bid.client_id_,
+                .order_id      = bid.id_,
+                .message_type  = MessageType::MATCH,
+                .status        = Status::SUCCESS
+            };
+
+            remaining -= fill_quantity;
+            bid.fill(fill_quantity);
+
+            out_ring_.push(market_msg);
+            out_ring_.push(ask_msg);
+
+            // remove orders if filled
+            if (bid.is_filled()) {
+                lowest_bids.pop_front();
+                orders_.erase(bid_id);
+            }
+
+            #if LOGGING
+            trades_ring_.push(trade);
+            #endif
+            
+            if (lowest_bids.empty()) asks_.erase(bid_price);
+        }
+    }
+
+        return remaining == 0;
 }
 
 bool Engine::canMatch(const Side side, const Price price) const {

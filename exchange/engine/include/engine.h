@@ -104,6 +104,7 @@ private:
     void cancelOrder(OrderId id);
     bool modifyOrder(OrderId id, const OrderRequest &order_request);
     bool matchOrders();
+    bool matchMarket(OrderId id, const OrderRequest& order_request);
     bool canMatch(Side side, Price price) const;
 
     #if LOGGING
