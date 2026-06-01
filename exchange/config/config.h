@@ -30,12 +30,12 @@
 // Number of inbound messages the per-connection read buffer can hold before
 // processRequest drains it.  Larger values let a single recv() feed more
 // work into the engine without a second syscall.
-#define READ_BATCH_SIZE 16
+#define READ_BATCH_SIZE 32
 
 // Number of outbound messages that can be packed into the per-connection write
 // buffer and sent in one send() syscall.  Larger values improve throughput at
 // the cost of slightly higher per-message latency (batch fill delay).
-#define WRITE_BATCH_SIZE 16
+#define WRITE_BATCH_SIZE 32
 
 #define LATENCY_SAMPLE_COUNT 10'000'000
 

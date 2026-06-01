@@ -170,7 +170,7 @@ void Server::handleRequests() {
                 registerConnections(listen_sock.get());
             }
             else if (events_in_[i].events & (EPOLLRDHUP | EPOLLHUP)) {
-                epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, fd, 0);
+                epoll_ctrl(epoll_in_, fd, EPOLL_CTL_DEL, 0);
                 condemned_inbound_[fd].store(true, std::memory_order_release);
             }
             else {
@@ -227,12 +227,12 @@ bool Server::readRequest(InboundState& state) {
         const ssize_t n = buf.read_from(client_fd);
 
         if (n == 0) {
-            epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, client_fd, 0);
+            epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_DEL, 0);
             condemned_inbound_[client_fd].store(true, std::memory_order_release);
             return true;
         }
         if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, client_fd, 0);
+            epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_DEL, 0);
             condemned_inbound_[client_fd].store(true, std::memory_order_release);
             return true;
         }
@@ -299,7 +299,7 @@ void Server::serveResponses() {
 
             if (condemned_inbound_[fd].load(std::memory_order_relaxed)) continue;
 
-            if (events_in_[i].events & (EPOLLRDHUP || EPOLLHUP)) {
+            if (events_out_[i].events & (EPOLLRDHUP | EPOLLHUP)) {
                 if (writable_fds_.contains(fd)) writable_fds_.erase(fd);
                 condemnConnection(fd, false);
             }
@@ -476,7 +476,7 @@ void Server::handleDisconnectsOutbound() {
 
         writable_fds_.erase(fd);
         if (epollout_armed_[fd]) {
-            epoll_ctrl(epoll_out_, EPOLL_CTL_DEL, fd, 0);
+            epoll_ctrl(epoll_out_, fd, EPOLL_CTL_DEL, 0);
             epollout_armed_[fd] = false;
         }
         ostate.reset();
@@ -524,16 +524,12 @@ void Server::handleDisconnectsInbound() {
 
 void Server::condemnConnection(const int fd, const bool caller_inbound) {
     if (caller_inbound) {
-        // Remove from epoll_in_ immediately so no future epoll batch includes fd.
-        // The EpollSocket destructor will attempt DEL again on istate.reset() but
-        // that is harmless (ENOENT).
-        epoll_ctrl(epoll_in_, EPOLL_CTL_DEL, fd, 0);
+        epoll_ctrl(epoll_in_, fd, EPOLL_CTL_DEL, 0);
         condemned_inbound_[fd].store(true, std::memory_order_release);
     } else {
-        // Outbound-initiated: clean up outbound-private state then signal inbound.
         writable_fds_.erase(fd);
         if (epollout_armed_[fd]) {
-            epoll_ctrl(epoll_out_, EPOLL_CTL_DEL, fd, 0);
+            epoll_ctrl(epoll_out_, fd, EPOLL_CTL_DEL, 0);
             epollout_armed_[fd] = false;
         }
         outbound_map_[fd].reset();
