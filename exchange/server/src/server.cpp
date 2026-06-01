@@ -183,11 +183,13 @@ void Server::handleRequests() {
 void Server::registerConnections(const int listen_fd) {
     int client_fd{-1};
     while ((client_fd = accept(listen_fd, nullptr, nullptr)) != -1) {
-        EpollSocket client_sock{client_fd, epoll_in_};
+        const int flags{fcntl(client_fd, F_GETFL, 0)};
+        if (flags == -1 || fcntl(client_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+            close(client_fd);
+            continue;  // not return — keep accepting other clients
+        }
 
-        const int flags = fcntl(client_fd, F_GETFL, 0);
-        if (flags == -1) return;
-        fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+        EpollSocket client_sock{client_fd, epoll_in_};
 
         if (epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLRDHUP) == -1) {
             return;
@@ -215,30 +217,27 @@ void Server::readAndProcessBytes(const int client_fd) {
     auto& istate = inbound_map_[client_fd];
     if (!istate.has_value()) return;
 
-    if (readRequest(*istate)) return;
-    processRequest(*istate);
+    // loop until socket drained or error
+    while (readRequest(*istate));
 }
 
 bool Server::readRequest(InboundState& state) {
-    const int client_fd = state.fd();
+    const int client_fd{state.fd()};
     ReadBuffer& buf = state.read_buffer();
 
     while (buf.remaining_capacity() > 0) {
         const ssize_t n = buf.read_from(client_fd);
 
-        if (n == 0) {
-            epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_DEL, 0);
-            condemned_inbound_[client_fd].store(true, std::memory_order_release);
-            return true;
-        }
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            epoll_ctrl(epoll_in_, client_fd, EPOLL_CTL_DEL, 0);
-            condemned_inbound_[client_fd].store(true, std::memory_order_release);
-            return true;
+        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            condemnConnection(client_fd, true);
+            return false;
         }
     }
 
-    return false;
+    processRequest(state);
+    // if the remaining capacity is > 0 then the socket was drained
+    // and don't we want this function to be called again
+    return buf.remaining_capacity() <= 0;
 }
 
 void Server::processRequest(InboundState& state) {
@@ -427,19 +426,19 @@ void Server::appendResponse(OutboundState& out) {
 bool Server::sendResponse(const int fd, OutboundState& out) {
     WriteBuffer& wbuf = out.write_buffer();
 
-    const ssize_t n = wbuf.write_to(fd);
-    if (wbuf.remaining_to_send() == 0) {
-        finishBatch(out);
-        return false;
+    while (wbuf.remaining_to_send() > 0) {
+        const ssize_t n = wbuf.write_to(fd);
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            return false;
+        }
+        if (!epollout_armed_[fd]) {
+            if (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0)
+                epollout_armed_[fd] = true;
+        }
     }
-    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-        return true;   // fatal — caller condemns
-    }
-    if (!epollout_armed_[fd]) {
-        if (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0)
-            epollout_armed_[fd] = true;
-    }
-    return false;
+
+    finishBatch(out);
+    return true;
 }
 
 void Server::finishBatch(OutboundState& out) const {

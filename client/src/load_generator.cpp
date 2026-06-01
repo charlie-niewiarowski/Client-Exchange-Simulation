@@ -12,6 +12,14 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
+
+static uint64_t now_ns() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1'000'000'000ULL
+         + static_cast<uint64_t>(ts.tv_nsec);
+}
 
 //=============================================================================
 // Response framing constants
@@ -41,6 +49,10 @@ static inline void advanceRead(ClientState& cs, const size_t n) {
 LoadGenerator::LoadGenerator(const int num_clients, const uint64_t rng_seed)
     : num_clients_(num_clients)
 {
+    if constexpr (EXPECTED_THROUGHPUT > 0) {
+        inter_arrival_ns_ = static_cast<uint64_t>(
+            static_cast<double>(num_clients_) * 1e9 / EXPECTED_THROUGHPUT);
+    }
     OrderFactory::instance(rng_seed);  // seed the singleton before first build_frame
     clients_.reserve(static_cast<size_t>(num_clients_));
     for (int i = 0; i < num_clients_; ++i) {
@@ -68,7 +80,23 @@ void LoadGenerator::run() {
     for (auto& cs : clients_) connectClient(cs);
 
     while (running_.load(std::memory_order_relaxed)) {
-        const int nfds = epoll_wait(epoll_fd_, events_, CLIENT_EPOLL_BATCH, -1);
+        int timeout_ms = -1;
+        if (inter_arrival_ns_ > 0) {
+            const uint64_t now = now_ns();
+            uint64_t min_deadline = UINT64_MAX;
+            for (const auto& cs : clients_) {
+                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_len == 0)
+                    min_deadline = std::min(min_deadline, cs.next_send_ns);
+            }
+            if (min_deadline != UINT64_MAX) {
+                const int64_t wait_ns = static_cast<int64_t>(min_deadline)
+                                      - static_cast<int64_t>(now);
+                timeout_ms = wait_ns <= 0 ? 0
+                           : static_cast<int>(wait_ns / 1'000'000 + 1);
+            }
+        }
+
+        const int nfds = epoll_wait(epoll_fd_, events_, CLIENT_EPOLL_BATCH, timeout_ms);
         if (nfds == -1) {
             if (errno == EINTR) continue;
             std::fprintf(stderr, "epoll_wait: %s\n", std::strerror(errno));
@@ -89,6 +117,14 @@ void LoadGenerator::run() {
                 if (cs->fd == -1) continue;  // reconnect happened inside
             }
             if (ev & EPOLLIN) handleReadable(*cs);
+        }
+
+        // Unblock clients whose inter-arrival slot elapsed while they had no I/O events.
+        if (inter_arrival_ns_ > 0) {
+            for (auto& cs : clients_) {
+                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_len == 0)
+                    buildBatch(cs);
+            }
         }
     }
 }
@@ -275,16 +311,25 @@ void LoadGenerator::handleReadable(ClientState& cs) {
 // Pipeline
 //=============================================================================
 
-// Pack PIPELINE_DEPTH frames into write_buf and send in one syscall.
-// No-op if the previous batch is still draining or the pipeline is already full.
+// Pack frames into write_buf and send in one syscall.
+// Rate-limited mode: one request at a time, gated by inter_arrival_ns_.
+// Unlimited mode: fills the full PIPELINE_DEPTH pipeline.
 void LoadGenerator::buildBatch(ClientState& cs) {
-    if (cs.write_len > 0)                  return;  // batch still in flight
-    if (cs.acks_pending == PIPELINE_DEPTH) return;  // pipeline saturated
+    if (cs.write_len > 0) return;  // batch still in flight
+
+    if (inter_arrival_ns_ > 0) {
+        if (cs.acks_pending > 0)        return;  // wait for the in-flight response
+        if (now_ns() < cs.next_send_ns) return;  // inter-arrival slot not yet elapsed
+    } else {
+        if (cs.acks_pending == PIPELINE_DEPTH) return;  // pipeline saturated
+    }
 
     auto& factory = OrderFactory::instance();
     cs.write_off = 0;
     cs.write_len = 0;
-    while (cs.acks_pending < PIPELINE_DEPTH) {
+
+    const int slots = (inter_arrival_ns_ > 0) ? 1 : PIPELINE_DEPTH;
+    while (cs.acks_pending < static_cast<uint32_t>(slots)) {
         InboundMessage msg{};
         const OrderId active_oid = (cs.active_count > 0)
             ? cs.active_orders[cs.active_read % MAX_ACTIVE_ORDERS]
@@ -301,6 +346,9 @@ void LoadGenerator::buildBatch(ClientState& cs) {
         ++cs.requests_sent;
         ++cs.orders_in_flight;
     }
+
+    if (inter_arrival_ns_ > 0)
+        cs.next_send_ns = now_ns() + inter_arrival_ns_;
 
     flushWrite(cs);
 }

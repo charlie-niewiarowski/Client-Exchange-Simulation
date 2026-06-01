@@ -53,7 +53,6 @@ public:
     }
 
     //===== write path =====
-
     [[nodiscard]] size_t bytes_written()      const { return bytes_written_; }
     [[nodiscard]] size_t remaining_to_send()  const { return len_ - bytes_written_; }
     [[nodiscard]] bool   has_room(size_t n)   const { return len_ + n <= N; }

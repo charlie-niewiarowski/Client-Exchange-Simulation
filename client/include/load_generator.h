@@ -49,6 +49,7 @@ public:
 private:
     int num_clients_;
     int epoll_fd_ = -1;
+    uint64_t inter_arrival_ns_ = 0;  // 0 = unlimited; set from EXPECTED_THROUGHPUT
     std::vector<ClientState> clients_;
     std::atomic<bool> running_{true};
     epoll_event events_[CLIENT_EPOLL_BATCH]{};

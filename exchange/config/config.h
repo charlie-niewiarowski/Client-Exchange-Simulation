@@ -13,7 +13,7 @@
 #define OUTBOUND_CORE 3
 
 #define LOGGING 0
-#define DIAGNOSTICS 0
+#define DIAGNOSTICS 1
 #define TESTING 0
 
 #define MIN_PRICE 0

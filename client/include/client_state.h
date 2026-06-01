@@ -30,7 +30,8 @@ struct ClientState {
     size_t read_len = 0;
 
     //===== pipelining =====
-    uint32_t acks_pending = 0;  // frames sent but not yet responded to
+    uint32_t acks_pending = 0;   // frames sent but not yet responded to
+    uint64_t next_send_ns = 0;   // earliest time (CLOCK_MONOTONIC ns) to send next request
 
     // Pending request types: FIFO ring parallel to the in-flight pipeline.
     // pending_tail advances on every send; pending_head on every ACK consumed.
