@@ -15,8 +15,8 @@
 // Wire frame sizes
 //=============================================================================
 
-// Inbound frame: "EXCHANGE\n"(9) + InboundMessage(48) + '\n'(1) = 58 bytes + padding for cache alignment.
-inline constexpr size_t INBOUND_BSIZE = 64;
+// Inbound frame: "EXCHANGE\n"(9) + InboundMessage(56) + '\n'(1) = 66 bytes + 6 bytes padding = 72 bytes.
+inline constexpr size_t INBOUND_BSIZE = 72;
 
 // Outbound frame: fixed 64 bytes (cache-line aligned).
 //   OK    -> "EXCHANGE\nOK\n"(12) + ClientId(4) + OrderId(8)          = 24 bytes

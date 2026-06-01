@@ -5,10 +5,11 @@
 // clients.  Call OrderFactory::instance() (passing an optional seed on the
 // first call) to obtain the process-wide instance.
 //
-// Wire frame layout (INBOUND_BSIZE = 58 bytes):
+// Wire frame layout (INBOUND_BSIZE = 72 bytes):
 //   "EXCHANGE\n"   (9 bytes)
-//   InboundMessage (48 bytes)
-//   '\n'           ( 1 byte)
+//   InboundMessage (56 bytes)
+//   '\n'           (1 byte)
+//   padding        (6 bytes)
 //
 // Probability table (uniform roll over [0, 99]):
 //   r > 25  (74/100) -> NEW

@@ -20,7 +20,7 @@
 
 // Capacity of the server-level error channel (SPSC: inbound → outbound).
 // Sized to absorb a full read batch of errors from every connected client.
-inline constexpr int ERROR_CHANNEL_SIZE = MAX_CLIENTS * READ_BATCH_SIZE;
+inline constexpr int ERROR_CHANNEL_SIZE = MAX_CLIENTS * PIPELINE_DEPTH;
 
 class Server {
 public:
@@ -98,7 +98,7 @@ private:
     // Returns true if a fatal send error occurred.  The caller is responsible
     // for condemning the fd; sendResponse never calls condemnConnection itself.
     bool sendResponse(int fd, OutboundState& out);
-    static void finishBatch(OutboundState& out) ;
+    static void finishBatch(OutboundState& out, Timestamp t6);
 
     //===== disconnect handling =====
     // Two-phase close: each thread cleans up its own state and signals the other.

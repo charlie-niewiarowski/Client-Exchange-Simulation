@@ -6,6 +6,7 @@
 #define LATENCY_H
 
 #include <chrono>
+#include <cstdio>
 #include <immintrin.h>
 #include <iostream>
 #include <thread>
@@ -15,12 +16,14 @@
 #include "config.h"
 
 struct LatencySample {
-    Timestamp t1, // read bytes
-    t2, // pushed inbound
-    t3, // popped inbound
-    t4, // pushed outbound
-    t5, // popped outbound
-    t6; // sent bytes
+    Timestamp t0, // read begins  (before recv syscall)
+    t1, // read finished (after recv syscall)
+    t2, // pushed inbound ring
+    t3, // engine popped inbound ring
+    t4, // engine pushed outbound ring
+    t5, // server popped outbound ring
+    t6, // write begins  (before send syscall)
+    t7; // write finished (after send syscall)
 };
 
 class LatencyHandler {
@@ -44,35 +47,45 @@ public:
             return;
         }
 
-        hdr_histogram *read_push_inbound, *push_pop_inbound, *pop_push_outbound, *push_pop_outbound, *pop_send_outbound,
-                      *end_to_end;
-        hdr_init(1, 1'000'000'000, 5, &read_push_inbound);
-        hdr_init(1, 1'000'000'000, 5, &push_pop_inbound);
-        hdr_init(1, 1'000'000'000, 5, &pop_push_outbound);
-        hdr_init(1, 1'000'000'000, 5, &push_pop_outbound);
-        hdr_init(1, 1'000'000'000, 5, &pop_send_outbound);
+        hdr_histogram *end_to_end;
         hdr_init(1, 1'000'000'000, 5, &end_to_end);
 
-
+#if DIAGNOSTICS
+        hdr_histogram *recv_syscall, *inbound_push, *inbound_ring,
+                       *engine_proc, *outbound_ring, *outbound_proc, *write_syscall;
+        hdr_init(1, 1'000'000'000, 5, &recv_syscall);
+        hdr_init(1, 1'000'000'000, 5, &inbound_push);
+        hdr_init(1, 1'000'000'000, 5, &inbound_ring);
+        hdr_init(1, 1'000'000'000, 5, &engine_proc);
+        hdr_init(1, 1'000'000'000, 5, &outbound_ring);
+        hdr_init(1, 1'000'000'000, 5, &outbound_proc);
+        hdr_init(1, 1'000'000'000, 5, &write_syscall);
+#endif
 
         for (size_t i{LATENCY_SAMPLE_DROP}; i < count_; ++i) {
             const auto& s = samples_[i];
-
-            hdr_record_value(read_push_inbound, calc_latency(s.t1, s.t2));  // gateway read  → ring push
-            hdr_record_value(push_pop_inbound,  calc_latency(s.t2, s.t3));  // ring push     → engine pop
-            hdr_record_value(pop_push_outbound, calc_latency(s.t3, s.t4));  // engine pop    → outbound push
-            hdr_record_value(push_pop_outbound, calc_latency(s.t4, s.t5));  // outbound push → gateway pop
-            hdr_record_value(pop_send_outbound, calc_latency(s.t5, s.t6));  // gateway pop   → bytes sent
-            hdr_record_value(end_to_end, calc_latency(s.t1, s.t6));  // gateway pop   → bytes sent
-
+            hdr_record_value(end_to_end, calc_latency(s.t0, s.t7));
+#if DIAGNOSTICS
+            hdr_record_value(recv_syscall,  calc_latency(s.t0, s.t1));
+            hdr_record_value(inbound_push,  calc_latency(s.t1, s.t2));
+            hdr_record_value(inbound_ring,  calc_latency(s.t2, s.t3));
+            hdr_record_value(engine_proc,   calc_latency(s.t3, s.t4));
+            hdr_record_value(outbound_ring, calc_latency(s.t4, s.t5));
+            hdr_record_value(outbound_proc, calc_latency(s.t5, s.t6));
+            hdr_record_value(write_syscall, calc_latency(s.t6, s.t7));
+#endif
         }
 
-        hdr_percentiles_print(read_push_inbound, stdout, 5, 1.0, CLASSIC);
-        hdr_percentiles_print(push_pop_inbound, stdout, 5, 1.0, CLASSIC);
-        hdr_percentiles_print(pop_push_outbound, stdout, 5, 1.0, CLASSIC);
-        hdr_percentiles_print(push_pop_outbound, stdout, 5, 1.0, CLASSIC);
-        hdr_percentiles_print(pop_send_outbound, stdout, 5, 1.0, CLASSIC);
-        hdr_percentiles_print(end_to_end, stdout, 5, 1.0, CLASSIC);
+        print_hist(end_to_end,    "begin read -> end write   (end-to-end)");
+#if DIAGNOSTICS
+        print_hist(recv_syscall,  "begin read -> end read    (recv syscall)");
+        print_hist(inbound_push,  "end read -> push inbound  (inbound thread)");
+        print_hist(inbound_ring,  "push inbound -> engine pop (ring transit)");
+        print_hist(engine_proc,   "engine pop -> engine push (engine processing)");
+        print_hist(outbound_ring, "engine push -> server pop (ring transit)");
+        print_hist(outbound_proc, "pop outbound -> begin write (outbound thread)");
+        print_hist(write_syscall, "begin write -> end write  (send syscall)");
+#endif
     }
 
     void push_sample(const LatencySample& sample) {
@@ -89,6 +102,15 @@ private:
     [[nodiscard]] int64_t calc_latency(const Timestamp t1, const Timestamp t2) const {
         const int64_t diff{static_cast<int64_t>(t2 - t1)};
         return diff / static_cast<int64_t>(ticks_per_ns_);
+    }
+
+    static void print_hist(hdr_histogram* h, const char* title) {
+        static constexpr double      pcts[]   = {50.0, 90.0, 99.0, 99.9, 99.99, 100.0};
+        static constexpr const char* labels[] = {"p50   ", "p90   ", "p99   ", "p99.9 ", "p99.99", "max   "};
+        std::printf("\n%s\n", title);
+        for (int i = 0; i < 6; ++i)
+            std::printf("  %s  %6lld ns\n", labels[i],
+                        static_cast<long long>(hdr_value_at_percentile(h, pcts[i])));
     }
 };
 

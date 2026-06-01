@@ -17,8 +17,8 @@
 // Buffer aliases
 //=============================================================================
 
-using ReadBuffer = Buffer<READ_BATCH_SIZE * INBOUND_BSIZE>;
-using WriteBuffer = Buffer<WRITE_BATCH_SIZE * OUTBOUND_BSIZE>;
+using ReadBuffer = Buffer<PIPELINE_DEPTH * INBOUND_BSIZE>;
+using WriteBuffer = Buffer<PIPELINE_DEPTH * OUTBOUND_BSIZE>;
 using StagingQueue = RingBuffer<OutboundMessage>;
 
 //=============================================================================
@@ -35,11 +35,12 @@ struct PendingError {
 //=============================================================================
 
 struct PendingLatency {
-    Timestamp recv_tsc;
-    Timestamp server_push_tsc;
-    Timestamp engine_pop_tsc;
-    Timestamp engine_push_tsc;
-    Timestamp server_pop;
+    Timestamp read_begin_tsc;   // t0 - always set
+    Timestamp recv_tsc;         // t1 - set under DIAGNOSTICS
+    Timestamp server_push_tsc;  // t2 - set under DIAGNOSTICS
+    Timestamp engine_pop_tsc;   // t3 - set under DIAGNOSTICS
+    Timestamp engine_push_tsc;  // t4 - set under DIAGNOSTICS
+    Timestamp server_pop;       // t5 - set under DIAGNOSTICS
     bool record;
 };
 
@@ -72,10 +73,14 @@ public:
 
     [[nodiscard]] ClientId client_id() const { return inbound_.client_id; }
 
+    void set_read_begin_tsc(Timestamp t) { read_begin_tsc_ = t; }
+    [[nodiscard]] Timestamp read_begin_tsc() const { return read_begin_tsc_; }
+
 private:
     const EpollSocket sock_;
     ReadBuffer read_buf_;
     InboundMessage inbound_{};
+    Timestamp read_begin_tsc_{};
 };
 
 //=============================================================================
@@ -118,7 +123,7 @@ private:
     // Single-threaded staging buffer; StagingQueue's atomics have no contention.
     StagingQueue staging_{RINGBUF_SIZE};
 
-    std::array<PendingLatency, WRITE_BATCH_SIZE> latency_batch_{};
+    std::array<PendingLatency, PIPELINE_DEPTH> latency_batch_{};
     int latency_count_{0};
 };
 

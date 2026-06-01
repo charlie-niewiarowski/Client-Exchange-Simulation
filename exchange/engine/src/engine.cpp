@@ -105,16 +105,20 @@ void Engine::exposeTrades() {
 // matching helpers
 //=============================================================================
 void Engine::executeRequest(const InboundMessage &msg) {
-    const Timestamp engine_pop_tsc = __rdtsc(); // t2: engine has received the inbound message
+#if DIAGNOSTICS
+    const Timestamp engine_pop_tsc = __rdtsc(); // t3
+#endif
 
     // For NEW orders assign the id now so it can be returned in the response.
     const OrderId assigned_id = (msg.message_type == MessageType::NEW) ? next_id_++ : msg.order_id;
 
-    // Designated initializer: timestamps must be set explicitly now that they lead the struct.
     OutboundMessage outbound_msg{
+        .read_begin_tsc  = msg.read_begin_tsc,
+#if DIAGNOSTICS
         .recv_tsc        = msg.recv_tsc,
         .server_push_tsc = msg.server_push,
         .engine_pop_tsc  = engine_pop_tsc,
+#endif
         .order_id        = assigned_id,
         .client_id       = msg.client_id,
         .message_type    = msg.message_type,
@@ -125,8 +129,10 @@ void Engine::executeRequest(const InboundMessage &msg) {
     switch (msg.message_type) {
         case MessageType::NEW:
             suppress_ack = addOrder(assigned_id, OrderRequest{
-                msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity,
-                msg.recv_tsc, msg.server_push, engine_pop_tsc
+                msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity
+#if DIAGNOSTICS
+                , msg.recv_tsc, msg.server_push, engine_pop_tsc
+#endif
             });
             break;
         case MessageType::CANCEL:
@@ -144,8 +150,10 @@ void Engine::executeRequest(const InboundMessage &msg) {
                 break;
             }
             suppress_ack = modifyOrder(msg.order_id, OrderRequest{
-                msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity,
-                msg.recv_tsc, msg.server_push, engine_pop_tsc
+                msg.client_id, msg.side, msg.order_type, msg.price, msg.quantity
+#if DIAGNOSTICS
+                , msg.recv_tsc, msg.server_push, engine_pop_tsc
+#endif
             });
             break;
         default:
@@ -156,7 +164,9 @@ void Engine::executeRequest(const InboundMessage &msg) {
     }
 
     if (!suppress_ack) {
-        outbound_msg.engine_push_tsc = __rdtsc(); // t3: engine is pushing the outbound message
+#if DIAGNOSTICS
+        outbound_msg.engine_push_tsc = __rdtsc(); // t4
+#endif
         out_ring_.push(outbound_msg);
     }
 }

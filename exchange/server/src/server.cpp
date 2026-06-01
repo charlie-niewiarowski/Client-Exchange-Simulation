@@ -225,6 +225,8 @@ bool Server::readRequest(InboundState& state) {
     const int client_fd{state.fd()};
     ReadBuffer& buf = state.read_buffer();
 
+    state.set_read_begin_tsc(__rdtsc()); // t0: always — before recv syscall
+
     while (buf.remaining_capacity() > 0) {
         if (buf.read_from(client_fd) <= 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
@@ -244,7 +246,9 @@ void Server::processRequest(InboundState& state) {
     const int fd = state.fd();
 
     while (buf.length() >= INBOUND_BSIZE) {
-        const Timestamp recv_tsc = __rdtsc();
+#if DIAGNOSTICS
+        const Timestamp recv_tsc = __rdtsc(); // t1: after recv syscall
+#endif
 
         const char* data = buf.view().data();
         constexpr size_t header_len = sizeof("EXCHANGE\n") - 1;
@@ -256,7 +260,10 @@ void Server::processRequest(InboundState& state) {
 
         InboundMessage msg{};
         memcpy(&msg, data + header_len, sizeof(InboundMessage));
-        msg.recv_tsc = recv_tsc;
+        msg.read_begin_tsc = state.read_begin_tsc(); // t0: always
+#if DIAGNOSTICS
+        msg.recv_tsc = recv_tsc;                      // t1
+#endif
         buf.advance(INBOUND_BSIZE);
 
         if (!validate_message(msg)) {
@@ -264,7 +271,9 @@ void Server::processRequest(InboundState& state) {
             continue;
         }
 
-        msg.server_push = __rdtsc();
+#if DIAGNOSTICS
+        msg.server_push = __rdtsc(); // t2
+#endif
         state.set_inbound(msg);
 
         const ClientId cid = msg.client_id;
@@ -395,7 +404,9 @@ void Server::beginSends() {
 
 void Server::appendResponse(OutboundState& out) {
     const OutboundMessage msg = out.pop_outbound();
-    const Timestamp t5 = __rdtsc();
+#if DIAGNOSTICS
+    const Timestamp t5 = __rdtsc(); // t5: server popped outbound ring
+#endif
 
     char frame[OUTBOUND_BSIZE]{};
 
@@ -415,15 +426,26 @@ void Server::appendResponse(OutboundState& out) {
 
     const bool record = (msg.server_error == ServerError::NONE &&
                          msg.message_type != MessageType::MATCH);
-    out.push_latency({
-        msg.recv_tsc,       msg.server_push_tsc,
-        msg.engine_pop_tsc, msg.engine_push_tsc,
-        t5,                 record
-    });
+    PendingLatency e{};
+    e.read_begin_tsc = msg.read_begin_tsc;
+#if DIAGNOSTICS
+    e.recv_tsc        = msg.recv_tsc;
+    e.server_push_tsc = msg.server_push_tsc;
+    e.engine_pop_tsc  = msg.engine_pop_tsc;
+    e.engine_push_tsc = msg.engine_push_tsc;
+    e.server_pop      = t5;
+#endif
+    e.record          = record;
+    out.push_latency(e);
 }
 
 bool Server::sendResponse(const int fd, OutboundState& out) {
     WriteBuffer& buf = out.write_buffer();
+
+    Timestamp t6 = 0;
+#if DIAGNOSTICS
+    t6 = __rdtsc(); // t6: before send syscall
+#endif
 
     while (buf.remaining_to_send() > 0) {
         if (buf.write_to(fd) <= 0) {
@@ -434,21 +456,28 @@ bool Server::sendResponse(const int fd, OutboundState& out) {
         }
     }
 
-    finishBatch(out);
+    finishBatch(out, t6);
     return true;
 }
 
-void Server::finishBatch(OutboundState& out) {
-    const Timestamp t6 = __rdtsc();
+void Server::finishBatch(OutboundState& out, const Timestamp t6) {
+    const Timestamp t7 = __rdtsc(); // t7: always — after send syscall
 
     for (int i = 0; i < out.latency_count(); ++i) {
         const PendingLatency& e = out.latency_entry(i);
         if (e.record) {
-            latency_handler.push_sample({
-                e.recv_tsc,       e.server_push_tsc,
-                e.engine_pop_tsc, e.engine_push_tsc,
-                e.server_pop,     t6
-            });
+            LatencySample s{};
+            s.t0 = e.read_begin_tsc;
+            s.t7 = t7;
+#if DIAGNOSTICS
+            s.t1 = e.recv_tsc;
+            s.t2 = e.server_push_tsc;
+            s.t3 = e.engine_pop_tsc;
+            s.t4 = e.engine_push_tsc;
+            s.t5 = e.server_pop;
+            s.t6 = t6;
+#endif
+            latency_handler.push_sample(s);
         }
     }
 
