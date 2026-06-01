@@ -5,6 +5,7 @@
 #ifndef CLIENT_STATE_H
 #define CLIENT_STATE_H
 
+#include "buffer.h"
 #include "communication_types.h"
 #include "protocol.h"
 #include "../config/config.h"
@@ -16,18 +17,10 @@ struct ClientState {
     bool connecting = false;  // true while non-blocking connect() is pending
 
     //===== write buf =====
-    // One batch = PIPELINE_DEPTH frames packed consecutively.
-    // write_off tracks bytes already handed to the kernel.
-    char write_buf[PIPELINE_DEPTH * INBOUND_BSIZE]{};
-    size_t write_len = 0;
-    size_t write_off = 0;
+    Buffer<PIPELINE_DEPTH * INBOUND_BSIZE> write_buf;
 
     //===== read buf =====
-    // Sized for a full pipeline batch plus a few unsolicited MATCH notifications.
-    // Data always lives at [0, read_len); advance_read() memmoves the remainder
-    // left — cheap for the small sizes involved.
-    char read_buf[PIPELINE_DEPTH * 2 * OUTBOUND_BSIZE]{};
-    size_t read_len = 0;
+    Buffer<PIPELINE_DEPTH * 2 * OUTBOUND_BSIZE> read_buf;
 
     //===== pipelining =====
     uint32_t acks_pending = 0;   // frames sent but not yet responded to

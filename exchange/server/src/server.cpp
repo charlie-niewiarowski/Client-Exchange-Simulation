@@ -226,9 +226,8 @@ bool Server::readRequest(InboundState& state) {
     ReadBuffer& buf = state.read_buffer();
 
     while (buf.remaining_capacity() > 0) {
-        const ssize_t n = buf.read_from(client_fd);
-
-        if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        if (buf.read_from(client_fd) <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
             condemnConnection(client_fd, true);
             return false;
         }
@@ -307,7 +306,7 @@ void Server::serveResponses() {
                 if (!ostate.has_value()) continue;
 
                 OutboundState& out = *ostate;
-                if (sendResponse(fd, out)) {
+                if (!sendResponse(fd, out)) {
                     condemnConnection(fd, false);
                 } else if (epollout_armed_[fd] && out.write_buffer().remaining_to_send() == 0) {
                     epoll_ctrl(epoll_out_, fd, EPOLL_CTL_DEL, EPOLLIN | EPOLLOUT);
@@ -375,7 +374,7 @@ void Server::beginSends() {
         }
 
         if (wbuf.remaining_to_send() > 0) {
-            if (sendResponse(fd, out)) {
+            if (!sendResponse(fd, out)) {
                 // Fatal send error: erase via iterator before condemning so
                 // condemnConnection's writable_fds_.erase(fd) is a harmless no-op.
                 it = writable_fds_.erase(it);
@@ -424,16 +423,14 @@ void Server::appendResponse(OutboundState& out) {
 }
 
 bool Server::sendResponse(const int fd, OutboundState& out) {
-    WriteBuffer& wbuf = out.write_buffer();
+    WriteBuffer& buf = out.write_buffer();
 
-    while (wbuf.remaining_to_send() > 0) {
-        const ssize_t n = wbuf.write_to(fd);
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+    while (buf.remaining_to_send() > 0) {
+        if (buf.write_to(fd) <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK && !epollout_armed_[fd]) {
+                epollout_armed_[fd] = (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0);
+            }
             return false;
-        }
-        if (!epollout_armed_[fd]) {
-            if (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0)
-                epollout_armed_[fd] = true;
         }
     }
 
@@ -441,7 +438,7 @@ bool Server::sendResponse(const int fd, OutboundState& out) {
     return true;
 }
 
-void Server::finishBatch(OutboundState& out) const {
+void Server::finishBatch(OutboundState& out) {
     const Timestamp t6 = __rdtsc();
 
     for (int i = 0; i < out.latency_count(); ++i) {

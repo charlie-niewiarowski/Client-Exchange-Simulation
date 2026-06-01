@@ -98,7 +98,7 @@ private:
     // Returns true if a fatal send error occurred.  The caller is responsible
     // for condemning the fd; sendResponse never calls condemnConnection itself.
     bool sendResponse(int fd, OutboundState& out);
-    void finishBatch(OutboundState& out) const;
+    static void finishBatch(OutboundState& out) ;
 
     //===== disconnect handling =====
     // Two-phase close: each thread cleans up its own state and signals the other.

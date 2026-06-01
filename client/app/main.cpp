@@ -79,6 +79,7 @@ int main(const int argc, char* argv[]) {
     sa.sa_handler = on_signal;
     sigaction(SIGINT,  &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGKILL, &sa, nullptr);
 
     LoadGenerator orch{num_clients, rng_seed};
     g_orch = &orch;

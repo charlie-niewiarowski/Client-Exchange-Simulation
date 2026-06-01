@@ -16,6 +16,7 @@ add_library(common_lib INTERFACE
         include/lib.h)
 target_include_directories(common_lib INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../shared
 )
 
 add_library(config INTERFACE)

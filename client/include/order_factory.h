@@ -87,8 +87,8 @@ private:
         const auto side       = static_cast<Side>     (side_dist_(rng_));
         const auto order_type = static_cast<OrderType>(type_dist_(rng_));
         return InboundMessage{
-            .client_id    = cid,
             .order_id     = 0,
+            .client_id    = cid,
             .price        = (order_type == OrderType::LIMIT) ? limit_price(side) : Price{0},
             .quantity     = order_qty(),
             .message_type = MessageType::NEW,
@@ -99,8 +99,8 @@ private:
 
     InboundMessage make_cancel(ClientId cid, OrderId target_oid) {
         return InboundMessage{
-            .client_id    = cid,
             .order_id     = target_oid,
+            .client_id    = cid,
             .price        = 0,
             .quantity     = 0,
             .message_type = MessageType::CANCEL,
@@ -112,8 +112,8 @@ private:
     InboundMessage make_modify(ClientId cid, OrderId target_oid) {
         const auto side = static_cast<Side>(side_dist_(rng_));
         return InboundMessage{
-            .client_id    = cid,
             .order_id     = target_oid,
+            .client_id    = cid,
             .price        = limit_price(side),
             .quantity     = order_qty(),
             .message_type = MessageType::MODIFY,
@@ -125,8 +125,8 @@ private:
     InboundMessage make_invalid_body(ClientId cid) {
         if (coin_(rng_)) {
             return InboundMessage{
-                .client_id    = cid,
                 .order_id     = 0,
+                .client_id    = cid,
                 .price        = 0,       // LIMIT + price==0 → invalid
                 .quantity     = 100,
                 .message_type = MessageType::NEW,
@@ -135,8 +135,8 @@ private:
             };
         }
         return InboundMessage{
-            .client_id    = cid,
             .order_id     = 0,
+            .client_id    = cid,
             .price        = 100,
             .quantity     = big_qty_dist_(rng_),  // > 1 000 000 → invalid
             .message_type = MessageType::NEW,

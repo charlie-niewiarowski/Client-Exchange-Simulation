@@ -27,14 +27,14 @@
 #define CLIENT_CORE 4
 
 // Set to 1 to print thread ID on startup
-#define DIAGNOSTICS 0
+#define DIAGNOSTICS 1
 
 // Set to 1 to print every server response as it arrives.
 // Output format:
 //   [OK]    cid:<id>  oid:<oid>          — ACK for a sent request
 //   [MATCH] cid:<id>  oid:<oid>          — fill notification (unsolicited OK)
 //   [ERR]   cid:<id>  :: <error string>  — server-side error
-#define LOGGING 1
+#define LOGGING 0
 
 // open-loop rate cap: aggregate orders / second across ALL clients.
 // The orchestrator divides this evenly so each client's inter-arrival time is
@@ -42,7 +42,7 @@
 // A client will not issue its next request until both (a) the previous
 // response has been received AND (b) its inter-arrival slot has elapsed.
 // Set to 0 to disable rate limiting (open-loop / go as fast as possible).
-#define EXPECTED_THROUGHPUT 0
+#define EXPECTED_THROUGHPUT 500'000
 
 // GBM volatility per step: drives mid-price drift AND limit-price spread.
 // Expected spread ≈ MID_PRICE_VOL * mid_price * sqrt(2/pi).

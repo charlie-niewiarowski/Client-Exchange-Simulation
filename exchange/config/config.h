@@ -5,8 +5,10 @@
 #ifndef UNTITLED_MACROS_H
 #define UNTITLED_MACROS_H
 
-// Exchange global
-#define COMMUNICATION_RING_COUNT 65536 // subject to change
+//=============================================================================
+// user-level macros (feel free to tinker around)
+//=============================================================================
+
 
 #define MATCHING_CORE 1
 #define INBOUND_CORE 2
@@ -19,11 +21,18 @@
 #define MIN_PRICE 0
 #define MAX_PRICE (10'000 * 100) // the 100 is because we are using uint32_t, so $10.25 = uint32_t(1025).
 
-// Engine subdir
-#define PREALLOCATION_COUNT 1'000'000
-#define TRADE_RING_COUNT COMMUNICATION_RING_COUNT
+//=============================================================================
+// development macros (DO NOT TOUCH UNLESS FOR A REASON)
+//=============================================================================
 
-// Server subdir
+//===== global =====
+#define COMMUNICATION_RING_COUNT 65536
+
+//===== engine =====
+#define PREALLOCATION_COUNT 1'000'000
+#define TRADE_RING_COUNT COMMUNICATION_RING_COUNT // only relevant for logging == 1
+
+//===== server =====
 #define PORT "4000"
 #define MAX_CLIENTS 64
 
@@ -37,6 +46,7 @@
 // the cost of slightly higher per-message latency (batch fill delay).
 #define WRITE_BATCH_SIZE 32
 
-#define LATENCY_SAMPLE_COUNT 10'000'000
-
+#define LATENCY_SAMPLE_DROP 100'000 // gets rid of cold start's influence
+#define LATENCY_SAMPLE_COUNT 10'000'000 + LATENCY_SAMPLE_DROP // despite skipping the first X samples we still
+                                                              // get the desired number of samples
 #endif //UNTITLED_MACROS_H

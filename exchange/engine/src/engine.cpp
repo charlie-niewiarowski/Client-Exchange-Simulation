@@ -115,8 +115,8 @@ void Engine::executeRequest(const InboundMessage &msg) {
         .recv_tsc        = msg.recv_tsc,
         .server_push_tsc = msg.server_push,
         .engine_pop_tsc  = engine_pop_tsc,
-        .client_id       = msg.client_id,
         .order_id        = assigned_id,
+        .client_id       = msg.client_id,
         .message_type    = msg.message_type,
         .status          = Status::SUCCESS
     };
@@ -265,21 +265,20 @@ bool Engine::matchOrders() {
             #endif
 
             OutboundMessage buy_msg{
-                .recv_tsc      = bid.recv_tsc,
+                .recv_tsc       = bid.recv_tsc,
                 .engine_pop_tsc = bid.engine_pop_tsc,
-                .client_id     = bid.client_id_,
-                .order_id      = bid.id_,
-                .message_type  = MessageType::MATCH,
-                .status        = Status::SUCCESS
+                .order_id       = bid.id_,
+                .client_id      = bid.client_id_,
+                .message_type   = MessageType::MATCH,
+                .status         = Status::SUCCESS
             };
             OutboundMessage ask_msg{
-                .recv_tsc      = ask.recv_tsc,
+                .recv_tsc       = ask.recv_tsc,
                 .engine_pop_tsc = ask.engine_pop_tsc,
-                .client_id     = ask.client_id_,
-                .order_id      = ask.id_,
-                
-                .message_type  = MessageType::MATCH,
-                .status        = Status::SUCCESS
+                .order_id       = ask.id_,
+                .client_id      = ask.client_id_,
+                .message_type   = MessageType::MATCH,
+                .status         = Status::SUCCESS
             };
 
             bid.fill(fill_quantity);
@@ -331,20 +330,20 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             auto fill_quantity = std::min(remaining, ask.remaining_quantity_);
 
             OutboundMessage market_msg{
-                .recv_tsc      = order_request.get_recv_tsc(),
+                .recv_tsc       = order_request.get_recv_tsc(),
                 .engine_pop_tsc = order_request.get_engine_in_tsc(),
-                .client_id     = order_request.get_clientId(),
-                .order_id      = id,
-                .message_type  = MessageType::MATCH,
-                .status        = Status::SUCCESS
+                .order_id       = id,
+                .client_id      = order_request.get_clientId(),
+                .message_type   = MessageType::MATCH,
+                .status         = Status::SUCCESS
             };
             OutboundMessage ask_msg{
-                .recv_tsc      = ask.recv_tsc,
+                .recv_tsc       = ask.recv_tsc,
                 .engine_pop_tsc = ask.engine_pop_tsc,
-                .client_id     = ask.client_id_,
-                .order_id      = ask.id_,
-                .message_type  = MessageType::MATCH,
-                .status        = Status::SUCCESS
+                .order_id       = ask.id_,
+                .client_id      = ask.client_id_,
+                .message_type   = MessageType::MATCH,
+                .status         = Status::SUCCESS
             };
 
             remaining -= fill_quantity;
@@ -379,20 +378,20 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             auto fill_quantity = std::min(remaining, bid.remaining_quantity_);
 
             OutboundMessage market_msg{
-                .recv_tsc      = order_request.get_recv_tsc(),
+                .recv_tsc       = order_request.get_recv_tsc(),
                 .engine_pop_tsc = order_request.get_engine_in_tsc(),
-                .client_id     = order_request.get_clientId(),
-                .order_id      = id,
-                .message_type  = MessageType::MATCH,
-                .status        = Status::SUCCESS
+                .order_id       = id,
+                .client_id      = order_request.get_clientId(),
+                .message_type   = MessageType::MATCH,
+                .status         = Status::SUCCESS
             };
             OutboundMessage ask_msg{
-                .recv_tsc      = bid.recv_tsc,
+                .recv_tsc       = bid.recv_tsc,
                 .engine_pop_tsc = bid.engine_pop_tsc,
-                .client_id     = bid.client_id_,
-                .order_id      = bid.id_,
-                .message_type  = MessageType::MATCH,
-                .status        = Status::SUCCESS
+                .order_id       = bid.id_,
+                .client_id      = bid.client_id_,
+                .message_type   = MessageType::MATCH,
+                .status         = Status::SUCCESS
             };
 
             remaining -= fill_quantity;

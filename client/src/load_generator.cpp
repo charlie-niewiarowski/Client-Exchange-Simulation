@@ -24,23 +24,7 @@ static uint64_t now_ns() {
 //=============================================================================
 // Response framing constants
 //=============================================================================
-
-// The server pads every outbound response to exactly OUTBOUND_BSIZE bytes
-// (zero-padded), so the client always advances by exactly OUTBOUND_BSIZE per
-// frame regardless of whether it is an OK or an ERROR.
-static constexpr size_t FRAME_SIZE = OUTBOUND_BSIZE;   // 64
-
-//=============================================================================
-// File-local helper
-//=============================================================================
-
-// Discard n bytes from the front of read_buf.  Buffer is small (≤4 KB) so
-// memmove is a single SIMD op; reset instead when empty to skip it entirely.
-static inline void advanceRead(ClientState& cs, const size_t n) {
-    cs.read_len -= n;
-    if (cs.read_len == 0) return;               // common case: fully drained
-    std::memmove(cs.read_buf, cs.read_buf + n, cs.read_len);
-}
+static constexpr size_t FRAME_SIZE = OUTBOUND_BSIZE;
 
 //=============================================================================
 // Special member functions
@@ -85,7 +69,7 @@ void LoadGenerator::run() {
             const uint64_t now = now_ns();
             uint64_t min_deadline = UINT64_MAX;
             for (const auto& cs : clients_) {
-                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_len == 0)
+                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_buf.length() == 0)
                     min_deadline = std::min(min_deadline, cs.next_send_ns);
             }
             if (min_deadline != UINT64_MAX) {
@@ -122,7 +106,7 @@ void LoadGenerator::run() {
         // Unblock clients whose inter-arrival slot elapsed while they had no I/O events.
         if (inter_arrival_ns_ > 0) {
             for (auto& cs : clients_) {
-                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_len == 0)
+                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_buf.length() == 0)
                     buildBatch(cs);
             }
         }
@@ -159,9 +143,8 @@ bool LoadGenerator::connectClient(ClientState& cs) {
 
     cs.fd           = fd;
     cs.connecting   = true;
-    cs.write_len    = 0;
-    cs.write_off    = 0;
-    cs.read_len     = 0;
+    cs.write_buf.clear();
+    cs.read_buf.clear();
     cs.acks_pending = 0;
     cs.pending_head = 0;
     cs.pending_tail = 0;
@@ -205,20 +188,16 @@ void LoadGenerator::handleConnect(ClientState& cs) {
 // level alignment: no matter where TCP splits a stream, we never mistake the
 // tail bytes of one frame for the header of the next.
 void LoadGenerator::handleReadable(ClientState& cs) {
-    const ssize_t n = recv(cs.fd,
-                           cs.read_buf + cs.read_len,
-                           sizeof(cs.read_buf) - cs.read_len,
-                           0);
+    const ssize_t n = cs.read_buf.read_from(cs.fd);
     if (n == 0) { reconnect(cs); return; }
     if (n <  0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) return;
         reconnect(cs); return;
     }
-    cs.read_len += static_cast<size_t>(n);
 
     // Drain all complete FRAME_SIZE-aligned responses.
-    while (cs.read_len >= FRAME_SIZE) {
-        const char* frame = cs.read_buf;
+    while (cs.read_buf.length() >= FRAME_SIZE) {
+        const char* frame = cs.read_buf.view().data();
 
         // Validate the "EXCHANGE\n" prefix before inspecting the type byte.
         // A mismatched prefix means the server sent protocol-violating bytes.
@@ -300,9 +279,9 @@ void LoadGenerator::handleReadable(ClientState& cs) {
             return;
         }
 
-        advanceRead(cs, FRAME_SIZE);
+        cs.read_buf.advance(FRAME_SIZE);
     }
-    // read_len < FRAME_SIZE -> incomplete frame; wait for the next recv().
+    // read_buf.length() < FRAME_SIZE -> incomplete frame; wait for the next recv().
 
     buildBatch(cs);
 }
@@ -315,7 +294,7 @@ void LoadGenerator::handleReadable(ClientState& cs) {
 // Rate-limited mode: one request at a time, gated by inter_arrival_ns_.
 // Unlimited mode: fills the full PIPELINE_DEPTH pipeline.
 void LoadGenerator::buildBatch(ClientState& cs) {
-    if (cs.write_len > 0) return;  // batch still in flight
+    if (cs.write_buf.length() > 0) return;  // batch still in flight
 
     if (inter_arrival_ns_ > 0) {
         if (cs.acks_pending > 0)        return;  // wait for the in-flight response
@@ -325,23 +304,23 @@ void LoadGenerator::buildBatch(ClientState& cs) {
     }
 
     auto& factory = OrderFactory::instance();
-    cs.write_off = 0;
-    cs.write_len = 0;
+    cs.write_buf.clear();
 
     const int slots = (inter_arrival_ns_ > 0) ? 1 : PIPELINE_DEPTH;
     while (cs.acks_pending < static_cast<uint32_t>(slots)) {
+        char frame[INBOUND_BSIZE];
         InboundMessage msg{};
         const OrderId active_oid = (cs.active_count > 0)
             ? cs.active_orders[cs.active_read % MAX_ACTIVE_ORDERS]
             : 0;
-        factory.build_frame(cs.client_id, active_oid, cs.write_buf + cs.write_len, msg);
+        factory.build_frame(cs.client_id, active_oid, frame, msg);
+        cs.write_buf.append(frame, INBOUND_BSIZE);
         // Advance the read cursor only for CANCEL/MODIFY so each targets a fresh slot.
         if (msg.message_type == MessageType::CANCEL ||
             msg.message_type == MessageType::MODIFY)
             ++cs.active_read;
         cs.pending_types[cs.pending_tail % PIPELINE_DEPTH] = msg.message_type;
         ++cs.pending_tail;
-        cs.write_len    += INBOUND_BSIZE;
         ++cs.acks_pending;
         ++cs.requests_sent;
         ++cs.orders_in_flight;
@@ -357,12 +336,9 @@ void LoadGenerator::buildBatch(ClientState& cs) {
 // only — no epoll_ctl needed.  On EAGAIN we arm EPOLLOUT and let the event
 // loop retry via the EPOLLOUT path (rare on loopback).
 void LoadGenerator::flushWrite(ClientState& cs) {
-    while (cs.write_off < cs.write_len) {
-        const ssize_t n = send(cs.fd,
-                               cs.write_buf + cs.write_off,
-                               cs.write_len  - cs.write_off,
-                               MSG_NOSIGNAL);
-        if (n > 0) { cs.write_off += static_cast<size_t>(n); continue; }
+    while (cs.write_buf.remaining_to_send() > 0) {
+        const ssize_t n = cs.write_buf.write_to(cs.fd);
+        if (n > 0) continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             epollMod(cs, EPOLLIN | EPOLLOUT);  // will retry via flushWrite()
             return;
@@ -371,8 +347,7 @@ void LoadGenerator::flushWrite(ClientState& cs) {
         return;
     }
     // Fully sent.  Reset buffer; leave socket armed EPOLLIN (no epoll_ctl).
-    cs.write_len = 0;
-    cs.write_off = 0;
+    cs.write_buf.try_reset();
 }
 
 //=============================================================================

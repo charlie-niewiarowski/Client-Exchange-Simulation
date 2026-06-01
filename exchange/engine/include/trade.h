@@ -5,6 +5,8 @@
 #ifndef UNTITLED_TRADE_H
 #define UNTITLED_TRADE_H
 
+#include <vector>
+
 #include "order_types.h"
 
 struct TradeInfo { // used to output results

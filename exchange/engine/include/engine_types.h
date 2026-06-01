@@ -7,8 +7,6 @@
 
 #include <deque>
 #include <map>
-#include <unordered_map>
-#include <functional>
 
 #include "config.h"
 #include "order_types.h"

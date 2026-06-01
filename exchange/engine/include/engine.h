@@ -68,17 +68,17 @@ private:
     private:
         Timestamp recv_tsc;           // 8 bytes  @ 0
         Timestamp server_push_tsc;    // 8 bytes  @ 8
-        Timestamp engine_pop_tsc;
+        Timestamp engine_pop_tsc;     // 8 bytes  @ 16
 
-        OrderId id_;                  // 8 bytes  @ 16
-        ClientId client_id_;          // 4 bytes  @ 24
-        Price price_;                 // 4 bytes  @ 28
-        Quantity initial_quantity_;   // 4 bytes  @ 32
-        Quantity remaining_quantity_; // 4 bytes  @ 36
-        Side side_;                   // 1 byte   @ 40
-        OrderType order_type_;        // 1 byte   @ 41
-        uint8_t padding[2];           // 2 bytes  @ 42
-    }; // 44 bytes (sizeof verified by compiler)
+        OrderId id_;                  // 8 bytes  @ 24
+        ClientId client_id_;          // 4 bytes  @ 32
+        Price price_;                 // 4 bytes  @ 36
+        Quantity initial_quantity_;   // 4 bytes  @ 40
+        Quantity remaining_quantity_; // 4 bytes  @ 44
+        Side side_;                   // 1 byte   @ 48
+        OrderType order_type_;        // 1 byte   @ 49
+        uint8_t padding[7];           // 7 bytes  @ 56
+    }; // 56 bytes (sizeof verified by compiler)
     using OrderMap = std::unordered_map<OrderId, Order>;
 
     //===== threads ======
@@ -97,12 +97,16 @@ private:
     //===== stop ======
     std::atomic<bool>& stop_;
 
-    //===== matching ======
+    //===== thread entry =====
     void handleMatching();
+
+    //===== state modifications =====
     void executeRequest(const InboundMessage &msg);
     bool addOrder(OrderId id, const OrderRequest &order_request);
     void cancelOrder(OrderId id);
     bool modifyOrder(OrderId id, const OrderRequest &order_request);
+
+    //===== matching ======
     bool matchOrders();
     bool matchMarket(OrderId id, const OrderRequest& order_request);
     bool canMatch(Side side, Price price) const;

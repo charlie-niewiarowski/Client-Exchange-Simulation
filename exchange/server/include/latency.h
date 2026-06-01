@@ -55,7 +55,7 @@ public:
 
 
 
-        for (size_t i = 0; i < count_; ++i) {
+        for (size_t i{LATENCY_SAMPLE_DROP}; i < count_; ++i) {
             const auto& s = samples_[i];
 
             hdr_record_value(read_push_inbound, calc_latency(s.t1, s.t2));  // gateway read  → ring push
