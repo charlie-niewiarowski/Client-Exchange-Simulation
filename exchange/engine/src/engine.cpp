@@ -6,11 +6,10 @@
 #include <cmath>
 #include <immintrin.h>
 #include <iostream>
-#include <pthread.h>
-#include <sched.h>
 #include <thread>
 
 #include "../include/engine.h"
+#include "../include/engine_types.h"
 #include "lib.h"
 
 #define ever (;;)
@@ -26,19 +25,6 @@ void write_to_console(const Trade &trade);
 //=============================================================================
 // Special Member Functions + Their Helpers
 //=============================================================================
-Engine::Order::Order(const OrderId id, const OrderRequest& order_request) {
-    id_ = id;
-    client_id_ = order_request.get_clientId();
-    side_ = order_request.get_side();
-    order_type_ = order_request.get_type();
-    price_ = order_request.get_price();
-    initial_quantity_ = order_request.get_quantity();
-    remaining_quantity_ = order_request.get_quantity();
-    recv_tsc = order_request.get_recv_tsc();
-    server_push_tsc = order_request.get_server_push_tsc();
-    engine_pop_tsc = order_request.get_engine_in_tsc();
-}
-
 Engine::Engine(InboundRing& in_ring, OutboundRing& out_ring, std::atomic<bool>& stop)
     : in_ring_(in_ring), out_ring_(out_ring), stop_(stop) {
     orders_.reserve(PREALLOCATION_COUNT);
@@ -178,46 +164,28 @@ bool Engine::addOrder(OrderId id, const OrderRequest& order_request) {
 
     if (orders_.contains(id)) return false;
 
-    Order order{id, order_request};
-    const auto side = order_request.get_side();
-    const auto price = order_request.get_price();
+    Order& order = orders_.emplace(id, Order{id, order_request}).first->second;
 
-    if (side == Side::BID) {
-        if (!bids_.contains(price)) {
-            bids_.insert(std::make_pair(price, PriceLevelQueue()));
-        }
-
-        bids_[price].push_back(id);
+    if (order.side_ == Side::BID) {
+        bids_[order.price_].push(&order);
     } else {
-        if (!asks_.contains(price)) {
-            asks_.insert(std::make_pair(price, PriceLevelQueue()));
-        }
-
-        asks_[price].push_back(id);
+        asks_[order.price_].push(&order);
     }
-
-    orders_.insert(std::make_pair(id, order));
 
     return matchOrders();
 }
 
 void Engine::cancelOrder(const OrderId id) {
-    const auto& order = orders_.at(id);
+    auto& order = orders_.at(id);
     const auto price = order.price_;
 
     if (order.side_ == Side::BID) {
         auto& queue = bids_[price];
-        if (auto itr = std::ranges::find(queue, id); itr != queue.end()) {
-            queue.erase(itr);
-        }
-
+        queue.remove(&order);
         if (queue.empty()) bids_.erase(price);
     } else {
         auto& queue = asks_[price];
-        if (auto itr = std::ranges::find(queue, id); itr != queue.end()) {
-            queue.erase(itr);
-        }
-
+        queue.remove(&order);
         if (queue.empty()) asks_.erase(price);
     }
 
@@ -253,10 +221,8 @@ bool Engine::matchOrders() {
 
         while (!highest_bids.empty() && !lowest_asks.empty()) {
             // get the orders
-            auto bid_id = highest_bids.front();
-            auto& bid = orders_.at(bid_id);
-            auto ask_id = lowest_asks.front();
-            auto& ask = orders_.at(ask_id);
+            auto bid = highest_bids.front();
+            auto ask = lowest_asks.front();
 
             // LIMIT orders only fill when prices cross; MARKET orders fill at any price
             if (bid_price < ask_price) break;
@@ -265,7 +231,7 @@ bool Engine::matchOrders() {
             any_filled = true;
 
             // fill the orders
-            auto fill_quantity = std::min(bid.remaining_quantity_, ask.remaining_quantity_);
+            auto fill_quantity = std::min(bid->remaining_quantity_, ask->remaining_quantity_);
 
             #if LOGGING
             Trade trade{
@@ -275,36 +241,40 @@ bool Engine::matchOrders() {
             #endif
 
             OutboundMessage buy_msg{
-                .recv_tsc       = bid.recv_tsc,
-                .engine_pop_tsc = bid.engine_pop_tsc,
-                .order_id       = bid.id_,
-                .client_id      = bid.client_id_,
+                .recv_tsc       = bid->recv_tsc,
+                #if DIAGNOSTICS
+                .engine_pop_tsc = bid->engine_pop_tsc,
+                #endif
+                .order_id       = bid->id_,
+                .client_id      = bid->client_id_,
                 .message_type   = MessageType::MATCH,
                 .status         = Status::SUCCESS
             };
             OutboundMessage ask_msg{
-                .recv_tsc       = ask.recv_tsc,
-                .engine_pop_tsc = ask.engine_pop_tsc,
-                .order_id       = ask.id_,
-                .client_id      = ask.client_id_,
+                .recv_tsc       = ask->recv_tsc,
+                #if DIAGNOSTICS
+                .engine_pop_tsc = ask->engine_pop_tsc,
+                #endif
+                .order_id       = ask->id_,
+                .client_id      = ask->client_id_,
                 .message_type   = MessageType::MATCH,
                 .status         = Status::SUCCESS
             };
 
-            bid.fill(fill_quantity);
-            ask.fill(fill_quantity);
+            bid->fill(fill_quantity);
+            ask->fill(fill_quantity);
 
             out_ring_.push(buy_msg);
             out_ring_.push(ask_msg);
 
             // remove orders if filled
-            if (bid.is_filled()) {
-                highest_bids.pop_front();
-                orders_.erase(bid_id);
+            if (bid->is_filled()) {
+                highest_bids.pop();
+                orders_.erase(bid->id_);
             }
-            if (ask.is_filled()) {
-                lowest_asks.pop_front();
-                orders_.erase(ask_id);
+            if (ask->is_filled()) {
+                lowest_asks.pop();
+                orders_.erase(ask->id_);
             }
 
             #if LOGGING
@@ -327,17 +297,16 @@ bool Engine::matchOrders() {
 
 bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
     auto remaining{order_request.get_quantity()};
-    
+
     if (order_request.get_side() == Side::BID) {
         while (!asks_.empty() && remaining > 0) {
             auto& [ask_price, lowest_asks] = *asks_.begin();
 
             if (lowest_asks.empty()) return false;
 
-            auto ask_id = lowest_asks.front();
-            auto& ask = orders_.at(ask_id);
+            auto ask = lowest_asks.front();
 
-            auto fill_quantity = std::min(remaining, ask.remaining_quantity_);
+            auto fill_quantity = std::min(remaining, ask->remaining_quantity_);
 
             OutboundMessage market_msg{
                 .recv_tsc       = order_request.get_recv_tsc(),
@@ -348,30 +317,32 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
                 .status         = Status::SUCCESS
             };
             OutboundMessage ask_msg{
-                .recv_tsc       = ask.recv_tsc,
-                .engine_pop_tsc = ask.engine_pop_tsc,
-                .order_id       = ask.id_,
-                .client_id      = ask.client_id_,
+                .recv_tsc       = ask->recv_tsc,
+                #if DIAGNOSTICS
+                .engine_pop_tsc = ask->engine_pop_tsc,
+                #endif
+                .order_id       = ask->id_,
+                .client_id      = ask->client_id_,
                 .message_type   = MessageType::MATCH,
                 .status         = Status::SUCCESS
             };
 
             remaining -= fill_quantity;
-            ask.fill(fill_quantity);
+            ask->fill(fill_quantity);
 
             out_ring_.push(market_msg);
             out_ring_.push(ask_msg);
 
             // remove orders if filled
-            if (ask.is_filled()) {
-                lowest_asks.pop_front();
-                orders_.erase(ask_id);
+            if (ask->is_filled()) {
+                lowest_asks.pop();
+                orders_.erase(ask->id_);
             }
 
             #if LOGGING
             trades_ring_.push(trade);
             #endif
-            
+
             if (lowest_asks.empty()) asks_.erase(ask_price);
         }
     }
@@ -382,10 +353,9 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             if (lowest_bids.empty()) return false;
 
 
-            auto bid_id = lowest_bids.front();
-            auto& bid = orders_.at(bid_id);
+            auto bid = lowest_bids.front();
 
-            auto fill_quantity = std::min(remaining, bid.remaining_quantity_);
+            auto fill_quantity = std::min(remaining, bid->remaining_quantity_);
 
             OutboundMessage market_msg{
                 .recv_tsc       = order_request.get_recv_tsc(),
@@ -396,31 +366,31 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
                 .status         = Status::SUCCESS
             };
             OutboundMessage ask_msg{
-                .recv_tsc       = bid.recv_tsc,
-                .engine_pop_tsc = bid.engine_pop_tsc,
-                .order_id       = bid.id_,
-                .client_id      = bid.client_id_,
+                .recv_tsc       = bid->recv_tsc,
+                .engine_pop_tsc = bid->engine_pop_tsc,
+                .order_id       = bid->id_,
+                .client_id      = bid->client_id_,
                 .message_type   = MessageType::MATCH,
                 .status         = Status::SUCCESS
             };
 
             remaining -= fill_quantity;
-            bid.fill(fill_quantity);
+            bid->fill(fill_quantity);
 
             out_ring_.push(market_msg);
             out_ring_.push(ask_msg);
 
             // remove orders if filled
-            if (bid.is_filled()) {
-                lowest_bids.pop_front();
-                orders_.erase(bid_id);
+            if (bid->is_filled()) {
+                lowest_bids.pop();
+                orders_.erase(bid->id_);
             }
 
             #if LOGGING
             trades_ring_.push(trade);
             #endif
-            
-            if (lowest_bids.empty()) asks_.erase(bid_price);
+
+            if (lowest_bids.empty()) bids_.erase(bid_price);
         }
     }
 

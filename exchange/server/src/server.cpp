@@ -262,7 +262,7 @@ void Server::processRequest(InboundState& state) {
         memcpy(&msg, data + header_len, sizeof(InboundMessage));
         msg.read_begin_tsc = state.read_begin_tsc(); // t0: always
 #if DIAGNOSTICS
-        msg.recv_tsc = recv_tsc;                      // t1
+        msg.recv_tsc = recv_tsc; // t1
 #endif
         buf.advance(INBOUND_BSIZE);
 
@@ -280,7 +280,7 @@ void Server::processRequest(InboundState& state) {
         auto [it, inserted] = client_map_.try_emplace(cid, fd);
         if (!inserted) it->second.store(fd, std::memory_order_relaxed);
 
-        while (!in_ring_.push(state.inbound())) {}
+        in_ring_.push(state.inbound());
     }
 }
 

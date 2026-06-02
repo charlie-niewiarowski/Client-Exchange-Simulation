@@ -7,12 +7,9 @@
 
 #include <map>
 #include <atomic>
-#include <unordered_map>
-#include <stdexcept>
 #include <thread>
 
 #include "engine_types.h"
-#include "trade.h"
 #include "order_request.h"
 #include "ring_buffer.hpp"
 #include "communication_types.h"
@@ -51,36 +48,6 @@ public:
     OrderId next_order_id() const { return next_id_.load(std::memory_order_relaxed); }
     #endif // TESTING
 private:
-    class Order { // main data variable
-    public:
-        Order(OrderId id, const OrderRequest &order_request);
-
-        bool is_filled() const { return remaining_quantity_ == 0; }
-        void fill(const Quantity quantity) {
-            if (quantity > remaining_quantity_) {
-                throw std::logic_error("Filling quantity larger than remaining quantity");
-            }
-
-            remaining_quantity_ -= quantity;
-        }
-
-        friend class Engine;
-    private:
-        Timestamp recv_tsc;           // 8 bytes  @ 0
-        Timestamp server_push_tsc;    // 8 bytes  @ 8
-        Timestamp engine_pop_tsc;     // 8 bytes  @ 16
-
-        OrderId id_;                  // 8 bytes  @ 24
-        ClientId client_id_;          // 4 bytes  @ 32
-        Price price_;                 // 4 bytes  @ 36
-        Quantity initial_quantity_;   // 4 bytes  @ 40
-        Quantity remaining_quantity_; // 4 bytes  @ 44
-        Side side_;                   // 1 byte   @ 48
-        OrderType order_type_;        // 1 byte   @ 49
-        uint8_t padding[7];           // 7 bytes  @ 56
-    }; // 56 bytes (sizeof verified by compiler)
-    using OrderMap = std::unordered_map<OrderId, Order>;
-
     //===== threads ======
     std::jthread matching_thread_;
 

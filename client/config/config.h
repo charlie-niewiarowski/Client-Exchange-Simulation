@@ -36,7 +36,7 @@
 // A client will not issue its next request until both (a) the previous
 // response has been received AND (b) its inter-arrival slot has elapsed.
 // Set to 0 to disable rate limiting (open-loop / go as fast as possible).
-#define EXPECTED_THROUGHPUT 5'000'000
+#define EXPECTED_THROUGHPUT 1'500'000
 
 //=============================================================================
 // development macros (DO NOT TOUCH UNLESS FOR A REASON)

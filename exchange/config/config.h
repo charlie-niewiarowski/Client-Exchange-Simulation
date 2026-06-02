@@ -25,7 +25,7 @@
 //=============================================================================
 
 //===== global =====
-#define COMMUNICATION_RING_COUNT 262144
+#define COMMUNICATION_RING_COUNT 524'288
 
 //===== engine =====
 #define PREALLOCATION_COUNT 1'000'000
