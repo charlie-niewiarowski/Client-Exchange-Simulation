@@ -51,11 +51,16 @@ private:
     //===== threads ======
     std::jthread matching_thread_;
 
-    //===== data containers ======
+    //===== data containers + facilitating members ======
     BidLevels bids_;
     AskLevels asks_;
     OrderMap orders_;
-    std::atomic<OrderId> next_id_{0};
+
+    OrderId next_id_{0};
+    Price best_bid_price_{MIN_PRICE};
+    Price best_ask_price_{MAX_PRICE};
+    size_t non_empty_bid_levels_{0};
+    size_t non_empty_ask_levels_{0};
 
     //===== communication with server ======
     InboundRing& in_ring_;
@@ -72,6 +77,9 @@ private:
     bool addOrder(OrderId id, const OrderRequest &order_request);
     void cancelOrder(OrderId id);
     bool modifyOrder(OrderId id, const OrderRequest &order_request);
+
+    void update_best_bid();
+    void update_best_ask();
 
     //===== matching ======
     bool matchOrders();

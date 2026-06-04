@@ -88,7 +88,7 @@ void Engine::exposeTrades() {
 #endif
 
 //=============================================================================
-// matching helpers
+// order execution
 //=============================================================================
 void Engine::executeRequest(const InboundMessage &msg) {
 #if DIAGNOSTICS
@@ -167,26 +167,36 @@ bool Engine::addOrder(OrderId id, const OrderRequest& order_request) {
     Order& order = orders_.emplace(id, Order{id, order_request}).first->second;
 
     if (order.side_ == Side::BID) {
-        bids_[order.price_].push(&order);
+        if (bids_[order.price_ - MIN_PRICE].empty()) ++non_empty_bid_levels_;
+        bids_[order.price_ - MIN_PRICE].push(&order);
+        if (order.price_ > best_bid_price_) best_bid_price_ = order.price_;
     } else {
-        asks_[order.price_].push(&order);
+        if (asks_[order.price_ - MIN_PRICE].empty()) ++non_empty_ask_levels_;
+        asks_[order.price_ - MIN_PRICE].push(&order);
+        if (order.price_ < best_ask_price_) best_ask_price_ = order.price_;
     }
 
     return matchOrders();
 }
 
 void Engine::cancelOrder(const OrderId id) {
-    auto& order = orders_.at(id);
+    const auto& order = orders_.at(id);
     const auto price = order.price_;
 
     if (order.side_ == Side::BID) {
-        auto& queue = bids_[price];
-        queue.remove(&order);
-        if (queue.empty()) bids_.erase(price);
+        bids_[price - MIN_PRICE].remove(&order);
+        if (bids_[price - MIN_PRICE].empty()) {
+            --non_empty_bid_levels_;
+            if (non_empty_bid_levels_ == 0)    best_bid_price_ = MIN_PRICE;
+            else if (price == best_bid_price_) update_best_bid();
+        }
     } else {
-        auto& queue = asks_[price];
-        queue.remove(&order);
-        if (queue.empty()) asks_.erase(price);
+        asks_[price - MIN_PRICE].remove(&order);
+        if (asks_[price - MIN_PRICE].empty()) {
+            --non_empty_ask_levels_;
+            if (non_empty_ask_levels_ == 0)    best_ask_price_ = MAX_PRICE;
+            else if (price == best_ask_price_) update_best_ask();
+        }
     }
 
     orders_.erase(id);
@@ -210,12 +220,16 @@ bool Engine::modifyOrder(const OrderId id, const OrderRequest& order_request) {
     return matchOrders();
 }
 
+//=============================================================================
+// matching
+//=============================================================================
+
 bool Engine::matchOrders() {
     bool any_filled = false;
 
-    while (!bids_.empty() && !asks_.empty()) {
-        auto& [bid_price, highest_bids] = *bids_.begin();
-        auto& [ask_price, lowest_asks] = *asks_.begin();
+    while (non_empty_bid_levels_ > 0 && non_empty_ask_levels_ > 0) {
+        auto& highest_bids = bids_[best_bid_price_ - MIN_PRICE];
+        auto& lowest_asks = asks_[best_ask_price_ - MIN_PRICE];
 
         bool level_matched = false;
 
@@ -225,7 +239,7 @@ bool Engine::matchOrders() {
             auto ask = lowest_asks.front();
 
             // LIMIT orders only fill when prices cross; MARKET orders fill at any price
-            if (bid_price < ask_price) break;
+            if (best_bid_price_ < best_ask_price_) break;
 
             level_matched = true;
             any_filled = true;
@@ -284,8 +298,16 @@ bool Engine::matchOrders() {
             // erase empty price levels and break to avoid dangling references
             const bool bid_level_done = highest_bids.empty();
             const bool ask_level_done = lowest_asks.empty();
-            if (bid_level_done) bids_.erase(bid_price);
-            if (ask_level_done) asks_.erase(ask_price);
+            if (bid_level_done) {
+                --non_empty_bid_levels_;
+                if (non_empty_bid_levels_ == 0) best_bid_price_ = MIN_PRICE;
+                else update_best_bid();
+            }
+            if (ask_level_done) {
+                --non_empty_ask_levels_;
+                if (non_empty_ask_levels_ == 0) best_ask_price_ = MAX_PRICE;
+                else update_best_ask();
+            }
             if (bid_level_done || ask_level_done) break;
         }
 
@@ -299,8 +321,8 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
     auto remaining{order_request.get_quantity()};
 
     if (order_request.get_side() == Side::BID) {
-        while (!asks_.empty() && remaining > 0) {
-            auto& [ask_price, lowest_asks] = *asks_.begin();
+        while (non_empty_ask_levels_ > 0 && remaining > 0) {
+            auto& lowest_asks{asks_[best_ask_price_ - MIN_PRICE]};
 
             if (lowest_asks.empty()) return false;
 
@@ -343,12 +365,16 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             trades_ring_.push(trade);
             #endif
 
-            if (lowest_asks.empty()) asks_.erase(ask_price);
+            if (lowest_asks.empty()) {
+                --non_empty_ask_levels_;
+                if (non_empty_ask_levels_ == 0) best_ask_price_ = MAX_PRICE;
+                else update_best_ask();
+            }
         }
     }
     else if (order_request.get_side() == Side::ASK) {
-        while (!bids_.empty() && remaining > 0) {
-            auto& [bid_price, lowest_bids] = *bids_.begin();
+        while (non_empty_bid_levels_ > 0 && remaining > 0) {
+            auto& lowest_bids = bids_[best_bid_price_ - MIN_PRICE];
 
             if (lowest_bids.empty()) return false;
 
@@ -390,7 +416,11 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             trades_ring_.push(trade);
             #endif
 
-            if (lowest_bids.empty()) bids_.erase(bid_price);
+            if (lowest_bids.empty()) {
+                --non_empty_bid_levels_;
+                if (non_empty_bid_levels_ == 0) best_bid_price_ = MIN_PRICE;
+                else update_best_bid();
+            }
         }
     }
 
@@ -399,15 +429,24 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
 
 bool Engine::canMatch(const Side side, const Price price) const {
     if (side == Side::BID) {
-        if (asks_.empty()) return false;
-
-        const auto& lowest_ask = asks_.cbegin()->first;
-        return price >= lowest_ask;
+        if (non_empty_ask_levels_ == 0) return false;
+        return price >= best_ask_price_;
     }
 
-    if (bids_.empty()) return false;
-    const auto& highest_bid = bids_.cbegin()->first;
-    return price <= highest_bid;
+    if (non_empty_bid_levels_ == 0) return false;
+    return price <= best_bid_price_;
+}
+
+void Engine::update_best_bid() {
+    while (best_bid_price_ > MIN_PRICE && bids_[best_bid_price_ - MIN_PRICE].empty()) {
+        --best_bid_price_;
+    }
+}
+
+void Engine::update_best_ask() {
+    while (best_ask_price_ < MAX_PRICE && asks_[best_ask_price_ - MIN_PRICE].empty()) {
+        ++best_ask_price_;
+    }
 }
 
 //=============================================================================

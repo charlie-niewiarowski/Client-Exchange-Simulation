@@ -2,5 +2,3 @@
 build
 client/build
 exchange/build
-bench.py
-bench_logs

@@ -10,6 +10,7 @@
 #include "config.h"
 
 #include <unordered_map>
+#include <array>
 
 //=============================================================================
 // Order class
@@ -132,7 +133,7 @@ private:
 //=============================================================================
 
 using OrderMap = std::unordered_map<OrderId, Order>;
-using BidLevels = std::map<Price, PriceLevelQueue, std::greater<>>;
-using AskLevels = std::map<Price, PriceLevelQueue, std::less<>>;
+using BidLevels = std::array<PriceLevelQueue, MAX_PRICE - MIN_PRICE + 1>;
+using AskLevels = std::array<PriceLevelQueue, MAX_PRICE - MIN_PRICE + 1>;
 
 #endif //UNTITLED_ORDERBOOK_TYPES_HPP

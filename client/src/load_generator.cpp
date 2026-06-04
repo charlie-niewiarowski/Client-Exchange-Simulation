@@ -69,14 +69,14 @@ void LoadGenerator::run() {
             const uint64_t now = now_ns();
             uint64_t min_deadline = UINT64_MAX;
             for (const auto& cs : clients_) {
-                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_buf.length() == 0)
+                if (cs.fd != -1 && !cs.connecting && cs.acks_pending < PIPELINE_DEPTH && cs.write_buf.length() == 0)
                     min_deadline = std::min(min_deadline, cs.next_send_ns);
             }
             if (min_deadline != UINT64_MAX) {
                 const int64_t wait_ns = static_cast<int64_t>(min_deadline)
                                       - static_cast<int64_t>(now);
                 timeout_ms = wait_ns <= 0 ? 0
-                           : static_cast<int>(wait_ns / 1'000'000 + 1);
+                           : static_cast<int>(wait_ns / 1'000'000);
             }
         }
 
@@ -106,7 +106,7 @@ void LoadGenerator::run() {
         // Unblock clients whose inter-arrival slot elapsed while they had no I/O events.
         if (inter_arrival_ns_ > 0) {
             for (auto& cs : clients_) {
-                if (cs.fd != -1 && !cs.connecting && cs.acks_pending == 0 && cs.write_buf.length() == 0)
+                if (cs.fd != -1 && !cs.connecting && cs.acks_pending < PIPELINE_DEPTH && cs.write_buf.length() == 0)
                     buildBatch(cs);
             }
         }
@@ -177,6 +177,10 @@ void LoadGenerator::handleConnect(ClientState& cs) {
     if (err != 0) { reconnect(cs); return; }
 
     cs.connecting = false;
+    #if LOGGING
+    std::fprintf(stderr, "[CONN]  cid:%-6u :: connected\n",
+                 static_cast<unsigned>(cs.client_id));
+    #endif
     epollMod(cs, EPOLLIN);   // switch to EPOLLIN only; writes go direct via send()
     buildBatch(cs);
 }
@@ -297,8 +301,8 @@ void LoadGenerator::buildBatch(ClientState& cs) {
     if (cs.write_buf.length() > 0) return;  // batch still in flight
 
     if (inter_arrival_ns_ > 0) {
-        if (cs.acks_pending > 0)        return;  // wait for the in-flight response
-        if (now_ns() < cs.next_send_ns) return;  // inter-arrival slot not yet elapsed
+        if (cs.acks_pending >= PIPELINE_DEPTH) return;  // pipeline saturated
+        if (now_ns() < cs.next_send_ns)        return;  // inter-arrival slot not yet elapsed
     } else {
         if (cs.acks_pending == PIPELINE_DEPTH) return;  // pipeline saturated
     }
@@ -306,7 +310,7 @@ void LoadGenerator::buildBatch(ClientState& cs) {
     auto& factory = OrderFactory::instance();
     cs.write_buf.clear();
 
-    const int slots = (inter_arrival_ns_ > 0) ? 1 : PIPELINE_DEPTH;
+const int slots = (inter_arrival_ns_ > 0) ? 1 : PIPELINE_DEPTH;
     while (cs.acks_pending < static_cast<uint32_t>(slots)) {
         char frame[INBOUND_BSIZE];
         InboundMessage msg{};
@@ -356,6 +360,10 @@ void LoadGenerator::flushWrite(ClientState& cs) {
 
 void LoadGenerator::reconnect(ClientState& cs) {
     if (cs.fd == -1) return;
+    #if LOGGING
+    std::fprintf(stderr, "[RECONN] cid:%-6u :: reconnecting\n",
+                 static_cast<unsigned>(cs.client_id));
+    #endif
     epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, cs.fd, nullptr);
     ::close(cs.fd);
     cs.fd = -1;
