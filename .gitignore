@@ -2,3 +2,4 @@
 build
 client/build
 exchange/build
+bench_logs
