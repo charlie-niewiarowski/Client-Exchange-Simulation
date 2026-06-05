@@ -45,15 +45,10 @@ Server::~Server() {
 void Server::run() {
     if (!setupEpoll()) return;
 
-    #if DIAGNOSTICS
-    static std::mutex print_mux;
-    #endif
-
     inbound_thread_ = std::jthread([&]() {
         #if DIAGNOSTICS
         {
-            std::lock_guard lock(print_mux);
-            std::cout << "inbound thread: " << gettid() << "\n";
+            std::cerr << "inbound thread: " << gettid() << "\n";
         }
         #endif
 
@@ -64,8 +59,7 @@ void Server::run() {
     outbound_thread_ = std::jthread([&]() {
         #if DIAGNOSTICS
         {
-            std::lock_guard lock(print_mux);
-            std::cout << "outbound thread: " << gettid() << "\n";
+            std::cerr << "outbound thread: " << gettid() << "\n";
         }
         #endif
 

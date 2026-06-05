@@ -7,7 +7,7 @@ int main() {
     Exchange exchange;
 
     #if DIAGNOSTICS
-    std::cout << "exchange tid: " << gettid() << std::endl;
+    std::cerr << "exchange tid: " << gettid() << std::endl;
     #endif
 
     std::signal(SIGINT, Exchange::stop);

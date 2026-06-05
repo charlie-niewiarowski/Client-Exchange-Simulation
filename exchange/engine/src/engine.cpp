@@ -393,7 +393,9 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             };
             OutboundMessage ask_msg{
                 .recv_tsc       = bid->recv_tsc,
+                #if DIAGNOSTICS
                 .engine_pop_tsc = bid->engine_pop_tsc,
+                #endif
                 .order_id       = bid->id_,
                 .client_id      = bid->client_id_,
                 .message_type   = MessageType::MATCH,

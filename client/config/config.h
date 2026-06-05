@@ -10,7 +10,7 @@
 //=============================================================================
 
 //===== data =====
-#define DIAGNOSTICS 1
+#define DIAGNOSTICS 0
 #define LOGGING 0
 
 //===== market activity =====
@@ -18,8 +18,9 @@
 #define MID_PRICE_VOL 0.002
 
 // Starting mid-price in integer ticks
-#define MID_PRICE_INITIAL 10000.0
-#define MID_PRICE_UPDATE_N 16
+#define MID_PRICE_INITIAL (100 * 100) // the first 100 is configurable the second is to represent the
+                                      // decimal since $100.25 = (uint32_t)10025
+#define MID_PRICE_UPDATE_N 16 // how often the mid-price is updated
 
 // Lognormal quantity distribution
 #define MEAN_QTY 100.0
@@ -36,7 +37,7 @@
 // A client will not issue its next request until both (a) the previous
 // response has been received AND (b) its inter-arrival slot has elapsed.
 // Set to 0 to disable rate limiting (open-loop / go as fast as possible).
-#define EXPECTED_THROUGHPUT 500'000
+#define EXPECTED_THROUGHPUT 0
 
 //=============================================================================
 // development macros (DO NOT TOUCH UNLESS FOR A REASON)

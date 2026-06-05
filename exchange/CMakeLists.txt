@@ -42,7 +42,7 @@ target_compile_options(exchange-release PRIVATE
 add_executable(exchange-debug ${EXCHANGE_SOURCES})
 target_link_libraries(exchange-debug PRIVATE common_lib config hdr_histogram_static)
 target_compile_options(exchange-debug PRIVATE
-        -O2 -g3 -fno-omit-frame-pointer
+        -O3 -g3 -fno-omit-frame-pointer
         -fsanitize=address,undefined -march=native)
 target_link_options(exchange-debug PRIVATE
         -fsanitize=address,undefined)
