@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-# ─── paths ────────────────────────────────────────────────────────────────────
+# paths
 
 ROOT         = Path(__file__).resolve().parent
 BUILD_DIR    = ROOT / "cmake-build-debug"
@@ -34,7 +34,7 @@ CLIENT_BIN   = BUILD_DIR / "client"   / "client-release"
 CLIENT_CFG   = ROOT / "client" / "config" / "config.h"
 LOG_DIR      = ROOT / "bench_logs"
 
-# ─── benchmark parameters ─────────────────────────────────────────────────────
+# benchmark parameters
 
 RUN_DURATION   = 15    # seconds per sample
 SAMPLES_NEEDED = 5
@@ -61,7 +61,7 @@ SECTION_ORDER = [
     "begin write -> end write  (send syscall)",
 ]
 
-# ─── config manipulation ──────────────────────────────────────────────────────
+# config manipulation
 
 _THROUGHPUT_RE = re.compile(r"(#define EXPECTED_THROUGHPUT)\s+([\d'_]+)")
 
@@ -85,7 +85,7 @@ def set_throughput(value: int) -> None:
 def restore_throughput(original_token: str) -> None:
     _write_throughput(original_token)
 
-# ─── build ────────────────────────────────────────────────────────────────────
+# build
 
 def rebuild_client() -> None:
     """Rebuild only client-release; exchange config is untouched."""
@@ -96,7 +96,7 @@ def rebuild_client() -> None:
     if r.returncode != 0:
         sys.exit(f"[ERROR] Build failed:\n{r.stderr.decode()}")
 
-# ─── single run ───────────────────────────────────────────────────────────────
+# single run 
 
 def run_sample(num_clients: int, log_path: Path) -> tuple[str, str]:
     """
@@ -148,7 +148,7 @@ def run_sample(num_clients: int, log_path: Path) -> tuple[str, str]:
     time.sleep(1)  # let the port leave TIME_WAIT before the next run
     return c_err_s, x_out_s
 
-# ─── parsers ──────────────────────────────────────────────────────────────────
+# parsers 
 
 def parse_throughput(client_stderr: str) -> float | None:
     m = re.search(r"requests/s\s*:\s*([\d.]+)", client_stderr)
@@ -176,7 +176,7 @@ def parse_histograms(exchange_stdout: str) -> dict[str, dict[str, int]]:
 
     return result
 
-# ─── statistics ───────────────────────────────────────────────────────────────
+#  statistics 
 
 def average_samples(
     samples: list[dict[str, dict[str, int]]],
@@ -192,7 +192,7 @@ def average_samples(
                 averaged[sec][pct] = sum(vals) / len(vals)
     return averaged
 
-# ─── reporting ────────────────────────────────────────────────────────────────
+# reporting
 
 _COL  = 50            # section label width
 _PCOL = 9             # per-percentile column width
@@ -228,7 +228,7 @@ def print_results(
         print(_pct_row(sec, averaged[sec]))
     print()
 
-# ─── main ─────────────────────────────────────────────────────────────────────
+# main 
 
 def preflight() -> None:
     missing = [p for p in (EXCHANGE_BIN, CLIENT_BIN) if not p.exists()]

@@ -58,20 +58,23 @@ git clone <repo-url>
 cd Client-Exchange-Simulation
 
 # Create a build directory and configure
-cmake -S . -B cmake-build-debug -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cd exchange && mkdir build && cd build && cmake ..
+cd client && mkdir build && cd build && cmake .. # in another terminal
 
 # Build all targets (exchange + client, release + debug variants)
-cmake --build cmake-build-debug -j$(nproc)
+make # terminal 1
+make # terminal 2
+
 ```
 
 This produces four binaries:
 
 | Binary | Path | Notes |
 |---|---|---|
-| `exchange-release` | `cmake-build-debug/exchange/exchange-release` | `-O3 -march=native` |
-| `exchange-debug`   | `cmake-build-debug/exchange/exchange-debug`   | AddressSanitizer + UBSanitizer |
-| `client-release`   | `cmake-build-debug/client/client-release`     | `-O3 -march=native` |
-| `client-debug`     | `cmake-build-debug/client/client-debug`       | `-g -march=native` |
+| `exchange-release` | `./exchange-release` | `-O3 -march=native` |
+| `exchange-debug`   | `./exchange-debug`   | AddressSanitizer + UBSanitizer |
+| `client-release`   | `./client-release`     | `-O3 -march=native` |
+| `client-debug`     | `./client-debug`       | `-g -march=native` |
 
 ---
 
@@ -81,13 +84,13 @@ Start the exchange first, then start the client in a separate terminal:
 
 ```bash
 # Terminal 1
-./cmake-build-debug/exchange/exchange-release
+./exchange-release
 
 # Terminal 2  (10 clients, random seed)
-./cmake-build-debug/client/client-release 10
+./client-release 10
 
 # Terminal 2  (10 clients, fixed seed for reproducibility)
-./cmake-build-debug/client/client-release 10 42
+./client-release 10 42
 ```
 
 Stop both with Ctrl-C. When the exchange stops it prints the latency histograms to stdout. The client prints aggregate throughput stats to stderr.
