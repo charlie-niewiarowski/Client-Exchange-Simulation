@@ -12,7 +12,6 @@ int main() {
 
     std::signal(SIGINT, Exchange::stop);
     std::signal(SIGTERM, Exchange::stop);
-    std::signal(SIGKILL, Exchange::stop);
 
     exchange.run();
 

@@ -1,0 +1,19 @@
+services:
+  exchange:
+    build: .
+    platform: linux/amd64
+    volumes:
+      - .:/app
+    command: ./build/exchange/exchange-release
+
+  client:
+    build: .
+    platform: linux/amd64
+    volumes:
+      - .:/app
+    # Share the exchange container's network namespace so that 127.0.0.1
+    # in the compiled-in client config resolves to the exchange process.
+    network_mode: "service:exchange"
+    command: sh -c "sleep 1 && ./build/client/client-release 10"
+    depends_on:
+      - exchange

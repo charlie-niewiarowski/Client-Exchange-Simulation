@@ -214,7 +214,7 @@ void LoadGenerator::handleReadable(ClientState& cs) {
             return;
         }
 
-        const char type = frame[9];   // 'O' = OK, 'E' = ERROR
+        const char type = frame[9];   // 'O' = ACK, 'M' = MATCH fill, 'E' = ERROR
         if (type == 'O') {
             if (cs.acks_pending > 0) {
                 // Consume the matching pending type to learn what request this ACK is for.
@@ -241,18 +241,19 @@ void LoadGenerator::handleReadable(ClientState& cs) {
                                  static_cast<unsigned long long>(log_oid));
                 }
                 #endif
-            } else {
-                ++cs.responses_match;  // unsolicited fill notification
-                #if LOGGING
-                {
-                    ClientId log_cid; std::memcpy(&log_cid, frame + 12, sizeof(log_cid));
-                    OrderId  log_oid; std::memcpy(&log_oid, frame + 16, sizeof(log_oid));
-                    std::fprintf(stderr, "[MATCH] cid:%-6u oid:%llu\n",
-                                 static_cast<unsigned>(log_cid),
-                                 static_cast<unsigned long long>(log_oid));
-                }
-                #endif
             }
+        } else if (type == 'M') {
+            ++cs.responses_match;
+            #if LOGGING
+            {
+                // "EXCHANGE\nMATCH\n" is 15 bytes; ClientId @ 15, OrderId @ 19.
+                ClientId log_cid; std::memcpy(&log_cid, frame + 15, sizeof(log_cid));
+                OrderId  log_oid; std::memcpy(&log_oid, frame + 19, sizeof(log_oid));
+                std::fprintf(stderr, "[MATCH] cid:%-6u oid:%llu\n",
+                             static_cast<unsigned>(log_cid),
+                             static_cast<unsigned long long>(log_oid));
+            }
+            #endif
         } else if (type == 'E') {
             if (cs.acks_pending > 0) {
                 ++cs.pending_head;  // keep pending ring in sync with acks_pending

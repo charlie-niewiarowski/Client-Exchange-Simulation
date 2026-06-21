@@ -121,17 +121,20 @@ void Engine::executeRequest(const InboundMessage &msg) {
 #endif
             });
             break;
-        case MessageType::CANCEL:
-            if (!orders_.contains(msg.order_id) || orders_.at(msg.order_id).client_id_ != msg.client_id) {
+        case MessageType::CANCEL: {
+            const auto it = orders_.find(msg.order_id);
+            if (it == orders_.end() || it->second.client_id_ != msg.client_id) {
                 outbound_msg.status = Status::FAILURE;
                 break;
             }
             cancelOrder(msg.order_id);
             break;
-        case MessageType::MODIFY:
-            if (!orders_.contains(msg.order_id)
-                    || orders_.at(msg.order_id).client_id_ != msg.client_id
-                    || orders_.at(msg.order_id).side_ != msg.side) {
+        }
+        case MessageType::MODIFY: {
+            const auto it = orders_.find(msg.order_id);
+            if (it == orders_.end()
+                    || it->second.client_id_ != msg.client_id
+                    || it->second.side_ != msg.side) {
                 outbound_msg.status = Status::FAILURE;
                 break;
             }
@@ -142,6 +145,7 @@ void Engine::executeRequest(const InboundMessage &msg) {
 #endif
             });
             break;
+        }
         default:
             #if LOGGING
             std::cerr << "engine: Inbound message attempted unknown request\n";
@@ -212,7 +216,12 @@ bool Engine::modifyOrder(const OrderId id, const OrderRequest& order_request) {
         return addOrder(id, order_request);
     }
 
-    order = Order{id, order_request};
+    // Same price and quantity: update only timestamps so prev_/next_ links are preserved.
+    order.recv_tsc = order_request.get_recv_tsc();
+#if DIAGNOSTICS
+    order.server_push_tsc = order_request.get_server_push_tsc();
+    order.engine_pop_tsc  = order_request.get_engine_in_tsc();
+#endif
     if (order_request.get_type() == OrderType::MARKET) {
         return matchMarket(id, order_request);
     }
@@ -249,8 +258,8 @@ bool Engine::matchOrders() {
 
             #if LOGGING
             Trade trade{
-                TradeInfo(bid.client_id_, bid.id_, bid.price_, fill_quantity),
-                TradeInfo(ask.client_id_, ask.id_, ask.price_, fill_quantity)
+                TradeInfo(bid->client_id_, bid->id_, bid->price_, fill_quantity),
+                TradeInfo(ask->client_id_, ask->id_, ask->price_, fill_quantity)
             };
             #endif
 
@@ -355,6 +364,13 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             out_ring_.push(market_msg);
             out_ring_.push(ask_msg);
 
+            #if LOGGING
+            Trade match_trade{
+                TradeInfo(order_request.get_clientId(), id, best_ask_price_, fill_quantity),
+                TradeInfo(ask->client_id_, ask->id_, ask->price_, fill_quantity)
+            };
+            #endif
+
             // remove orders if filled
             if (ask->is_filled()) {
                 lowest_asks.pop();
@@ -362,7 +378,7 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             }
 
             #if LOGGING
-            trades_ring_.push(trade);
+            trades_ring_.push(match_trade);
             #endif
 
             if (lowest_asks.empty()) {
@@ -408,6 +424,13 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             out_ring_.push(market_msg);
             out_ring_.push(ask_msg);
 
+            #if LOGGING
+            Trade match_trade{
+                TradeInfo(bid->client_id_, bid->id_, bid->price_, fill_quantity),
+                TradeInfo(order_request.get_clientId(), id, best_bid_price_, fill_quantity)
+            };
+            #endif
+
             // remove orders if filled
             if (bid->is_filled()) {
                 lowest_bids.pop();
@@ -415,7 +438,7 @@ bool Engine::matchMarket(OrderId id, const OrderRequest& order_request) {
             }
 
             #if LOGGING
-            trades_ring_.push(trade);
+            trades_ring_.push(match_trade);
             #endif
 
             if (lowest_bids.empty()) {

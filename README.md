@@ -40,13 +40,58 @@ Client-Exchange-Simulation/
 
 ## Prerequisites
 
+**Native Linux build:**
 - Linux (the server uses `epoll` and thread pinning via `pthread_setaffinity_np`)
 - GCC or Clang with C++23 support
 - CMake 3.25 or newer
 - Python 3.8 or newer (only needed for `bench.py`)
 - An internet connection on first build (CMake fetches HdrHistogram_c via FetchContent)
 
-The project has been developed and tested on x86-64. The `__rdtsc` intrinsic and `-march=native` are used throughout, so it will not build correctly on non-x86 targets without modification.
+**macOS / Windows (Docker):**
+- Docker Desktop
+- Apple Silicon Macs must enable Rosetta in Docker Desktop settings
+
+The project has been developed and tested on x86-64. The `__rdtsc` intrinsic and `-march=native` are used throughout, so it will not build correctly on non-x86 targets without modification. Under Docker on Apple Silicon the simulation runs via x86-64 emulation. It's functional but not suitable for latency benchmarking.
+
+---
+
+## Docker (macOS / Windows)
+
+The Docker image is a Linux build environment. Source is mounted as a volume so builds persist on the host and you interact with the project exactly as you would on a native Linux machine.
+
+```bash
+# Build the environment image (once, or after changing the Dockerfile)
+docker compose build
+
+# Configure the project (once — this downloads hdr_histogram via FetchContent)
+docker compose run --rm exchange cmake -S . -B build
+
+# Build all targets
+docker compose run --rm exchange cmake --build build -j$(nproc)
+```
+
+From here you can either run the services via Compose:
+
+```bash
+# Start exchange + client (requires binaries to be built above)
+docker compose up
+
+# Run the automated benchmark
+docker compose run --rm exchange python3 bench.py
+```
+
+Or work interactively exactly as you would on Linux:
+
+```bash
+# Open a shell inside the container (source is live-mounted at /app)
+docker compose run --rm exchange bash
+
+# Inside the container — normal Linux workflow:
+cmake --build build --target exchange-release -j$(nproc)
+./build/exchange/exchange-release
+```
+
+To change the number of clients, edit the `command` for the `client` service in `docker-compose.yml`, then re-run `docker compose up`.
 
 ---
 
@@ -57,24 +102,28 @@ The project has been developed and tested on x86-64. The `__rdtsc` intrinsic and
 git clone <repo-url>
 cd Client-Exchange-Simulation
 
-# Create a build directory and configure
-cd exchange && mkdir build && cd build && cmake ..
-cd client && mkdir build && cd build && cmake .. # in another terminal
+# Configure (downloads hdr_histogram on first run)
+cmake -S . -B build
 
-# Build all targets (exchange + client, release + debug variants)
-make # terminal 1
-make # terminal 2
-
+# Build all targets
+cmake --build build -j$(nproc)
 ```
 
 This produces four binaries:
 
 | Binary | Path | Notes |
 |---|---|---|
-| `exchange-release` | `./exchange-release` | `-O3 -march=native` |
-| `exchange-debug`   | `./exchange-debug`   | AddressSanitizer + UBSanitizer |
-| `client-release`   | `./client-release`     | `-O3 -march=native` |
-| `client-debug`     | `./client-debug`       | `-g -march=native` |
+| `exchange-release` | `build/exchange/exchange-release` | `-O3 -march=native` |
+| `exchange-debug`   | `build/exchange/exchange-debug`   | AddressSanitizer + UBSanitizer |
+| `client-release`   | `build/client/client-release`     | `-O3 -march=native` |
+| `client-debug`     | `build/client/client-debug`       | `-g -march=native` |
+
+Individual targets can be built in isolation:
+
+```bash
+cmake --build build --target exchange-release
+cmake --build build --target client-release
+```
 
 ---
 
@@ -84,13 +133,13 @@ Start the exchange first, then start the client in a separate terminal:
 
 ```bash
 # Terminal 1
-./exchange-release
+./build/exchange/exchange-release
 
 # Terminal 2  (10 clients, random seed)
-./client-release 10
+./build/client/client-release 10
 
 # Terminal 2  (10 clients, fixed seed for reproducibility)
-./client-release 10 42
+./build/client/client-release 10 42
 ```
 
 Stop both with Ctrl-C. When the exchange stops it prints the latency histograms to stdout. The client prints aggregate throughput stats to stderr.
@@ -163,11 +212,14 @@ All compile-time configuration lives in header files. A rebuild is required afte
 The script requires the release binaries to already be built. It temporarily modifies `EXPECTED_THROUGHPUT` in `client/config/config.h`, rebuilds `client-release`, runs the pair, and restores the original value on exit regardless of whether it succeeds or fails.
 
 ```bash
-# Run with default 10 clients
+# Run with default 10 clients (native or inside a Docker shell)
 python3 bench.py
 
 # Run with 20 clients
 python3 bench.py --clients 20
+
+# Run via Docker Compose (no shell needed)
+docker compose run --rm exchange python3 bench.py
 ```
 
 Per-run logs are written to `bench_logs/` for post-hoc inspection.
@@ -184,8 +236,9 @@ Every frame sent from client to exchange is 72 bytes:
 - 1-byte newline + 6 bytes padding
 
 Every frame sent from exchange to client is 32 bytes:
-- On success: `"EXCHANGE\nOK\n"` + 4-byte ClientId + 8-byte OrderId + zero padding
-- On error: `"EXCHANGE\nERROR\n"` + ASCII error string + newline + zero padding
+- ACK: `"EXCHANGE\nOK\n"` (12 B) + 4-byte ClientId + 8-byte OrderId + zero padding
+- Fill notification: `"EXCHANGE\nMATCH\n"` (15 B) + 4-byte ClientId + 8-byte OrderId + zero padding
+- Error: `"EXCHANGE\nERROR\n"` + ASCII error string + newline + zero padding
 
 Fixed frame sizes allow both sides to parse byte streams without a length prefix or delimiter search: each side advances by exactly one frame size per message.
 

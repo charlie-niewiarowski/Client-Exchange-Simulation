@@ -404,7 +404,12 @@ void Server::appendResponse(OutboundState& out) {
 
     char frame[OUTBOUND_BSIZE]{};
 
-    if (msg.server_error == ServerError::NONE) {
+    if (msg.message_type == MessageType::MATCH) {
+        memcpy(frame, MATCH_STATUS, strlen(MATCH_STATUS));
+        memcpy(frame + strlen(MATCH_STATUS),                       &msg.client_id, sizeof(ClientId));
+        memcpy(frame + strlen(MATCH_STATUS) + sizeof(ClientId),    &msg.order_id,  sizeof(OrderId));
+    }
+    else if (msg.server_error == ServerError::NONE) {
         memcpy(frame, OK_STATUS, strlen(OK_STATUS));
         memcpy(frame + strlen(OK_STATUS),                    &msg.client_id, sizeof(ClientId));
         memcpy(frame + strlen(OK_STATUS) + sizeof(ClientId), &msg.order_id,  sizeof(OrderId));
@@ -443,7 +448,7 @@ bool Server::sendResponse(const int fd, OutboundState& out) {
 
     while (buf.remaining_to_send() > 0) {
         if (buf.write_to(fd) <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK && !epollout_armed_[fd]) {
+            if ((errno == EAGAIN || errno == EWOULDBLOCK) && !epollout_armed_[fd]) {
                 epollout_armed_[fd] = (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0);
             }
             return false;

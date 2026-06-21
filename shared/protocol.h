@@ -28,7 +28,8 @@ inline constexpr size_t OUTBOUND_BSIZE = 32;
 // Status prefixes (server -> client)
 //=============================================================================
 
-#define OK_STATUS    "EXCHANGE\nOK\n"
+#define OK_STATUS    "EXCHANGE\nOK\n"       // 12 bytes; ClientId @ 12, OrderId @ 16
+#define MATCH_STATUS "EXCHANGE\nMATCH\n"   // 15 bytes; ClientId @ 15, OrderId @ 19
 #define ERROR_STATUS "EXCHANGE\nERROR\n"
 
 //=============================================================================

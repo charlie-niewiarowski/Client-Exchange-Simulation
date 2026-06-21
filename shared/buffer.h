@@ -27,20 +27,28 @@ public:
     Buffer() = default;
 
     //===== read path =====
-    [[nodiscard]] size_t length() const { return len_; }
+    [[nodiscard]] size_t length() const { return len_ - read_off_; }
     [[nodiscard]] size_t remaining_capacity() const { return N - len_; }
-    [[nodiscard]] std::string_view view() const { return {data_, len_}; }
+    [[nodiscard]] std::string_view view() const { return {data_ + read_off_, len_ - read_off_}; }
 
     ssize_t read_from(const int fd) {
+        // Compact only when the physical tail is full but the logical front has been consumed.
+        // Moves at most (INBOUND_BSIZE - 1) leftover bytes — a partial message tail.
+        if (read_off_ > 0 && len_ == N) {
+            const size_t remaining = len_ - read_off_;
+            if (remaining > 0)
+                std::memmove(data_, data_ + read_off_, remaining);
+            len_ = remaining;
+            read_off_ = 0;
+        }
         ssize_t n = recv(fd, data_ + len_, N - len_, 0);
         if (n > 0) len_ += static_cast<size_t>(n);
         return n;
     }
 
     void advance(const size_t n) {
-        if (n >= len_) { len_ = 0; return; }
-        std::memmove(data_, data_ + n, len_ - n);
-        len_ -= n;
+        read_off_ += n;
+        if (read_off_ >= len_) { read_off_ = 0; len_ = 0; }
     }
 
     //===== write path =====
@@ -69,12 +77,13 @@ public:
     }
 
     //===== utils =====
-    void clear() { len_ = 0; bytes_written_ = 0; }
+    void clear() { len_ = 0; bytes_written_ = 0; read_off_ = 0; }
 
 private:
     char data_[N]{};
     size_t len_{0};
     size_t bytes_written_{0};
+    size_t read_off_{0};
 };
 
 #endif //BUFFER_H

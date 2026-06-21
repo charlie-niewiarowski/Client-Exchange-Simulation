@@ -176,11 +176,10 @@ OrderFactory::FrameKind OrderFactory::build_frame(
         frame_message(msg_out, dst);
         return FrameKind::CANCEL;
     }
-    if (r >= INT_MIN) {
-        msg_out = make_modify(cid, active_order);
-        frame_message(msg_out, dst);
-        return FrameKind::MODIFY;
-    }
+    // r in [0, 8]: MODIFY (GARBAGE/INVALID disabled — re-enable the block below if needed)
+    msg_out = make_modify(cid, active_order);
+    frame_message(msg_out, dst);
+    return FrameKind::MODIFY;
 
     /*
     if (coin_(rng_)) {
