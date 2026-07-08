@@ -1,19 +1,52 @@
-services:
-  exchange:
-    build: .
-    platform: linux/amd64
-    volumes:
-      - .:/app
-    command: ./build/exchange/exchange-release
+# All services share one image and the bind-mounted source tree. The build
+# directory is a separate named volume (not the host's ./build) so the Linux
+# CMake cache never collides with a host-side (e.g. macOS/Homebrew) configure,
+# and build artifacts persist across runs and are shared by every service.
+x-common: &common
+  build: .
+  platform: linux/amd64
+  volumes:
+    - .:/app
+    - build:/app/build
 
+services:
+  # Interactive Linux shell. Use it to configure and build. Wrap commands that
+  # need $(nproc) in `sh -c '...'` so it expands inside the container, not the
+  # host shell.
+  #   docker compose run --rm dev                              # bash shell
+  #   docker compose run --rm dev cmake -S . -B build          # configure (once)
+  #   docker compose run --rm dev sh -c 'cmake --build build -j"$(nproc)"'
+  #   docker compose run --rm dev cmake --build build --target exchange-release
+  #   docker compose run --rm dev cmake --build build --target client-release
+  dev:
+    <<: *common
+    stdin_open: true
+    tty: true
+
+  # Exchange server. Runs the pre-built release binary; build it first via `dev`.
+  #   docker compose run --rm exchange
+  # Port 4000 is published so a native (host) client can connect too.
+  exchange:
+    <<: *common
+    entrypoint: ["./build/exchange/exchange-release"]
+    ports:
+      - "4000:4000"
+
+  # Client load generator. Shares the exchange's network namespace so the
+  # client's compiled-in 127.0.0.1 target reaches the exchange over loopback
+  # (inet_pton parses only numeric IPs, so a service hostname would not work).
+  # Starting `client` auto-starts `exchange`; the client's reconnect backoff
+  # covers the brief window before the exchange is listening.
+  #   docker compose run --rm client          # 10 clients (default)
+  #   docker compose run --rm client 20       # 20 clients
+  #   docker compose run --rm client 20 42    # 20 clients, fixed seed 42
   client:
-    build: .
-    platform: linux/amd64
-    volumes:
-      - .:/app
-    # Share the exchange container's network namespace so that 127.0.0.1
-    # in the compiled-in client config resolves to the exchange process.
+    <<: *common
     network_mode: "service:exchange"
-    command: sh -c "sleep 1 && ./build/client/client-release 10"
     depends_on:
       - exchange
+    entrypoint: ["./build/client/client-release"]
+    command: ["10"]
+
+volumes:
+  build:

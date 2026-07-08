@@ -45,7 +45,7 @@ Client-Exchange-Simulation/
 - GCC or Clang with C++23 support
 - CMake 3.25 or newer
 - Python 3.8 or newer (only needed for `bench.py`)
-- An internet connection on first build (CMake fetches HdrHistogram_c via FetchContent)
+- An internet connection on first build (CMake fetches HdrHistogram_c via FetchContent)\
 
 **macOS / Windows (Docker):**
 - Docker Desktop
@@ -53,49 +53,7 @@ Client-Exchange-Simulation/
 
 The project has been developed and tested on x86-64. The `__rdtsc` intrinsic and `-march=native` are used throughout, so it will not build correctly on non-x86 targets without modification. Under Docker on Apple Silicon the simulation runs via x86-64 emulation. It's functional but not suitable for latency benchmarking.
 
----
-
-## Docker (macOS / Windows)
-
-The Docker image is a Linux build environment. Source is mounted as a volume so builds persist on the host and you interact with the project exactly as you would on a native Linux machine.
-
-```bash
-# Build the environment image (once, or after changing the Dockerfile)
-docker compose build
-
-# Configure the project (once — this downloads hdr_histogram via FetchContent)
-docker compose run --rm exchange cmake -S . -B build
-
-# Build all targets
-docker compose run --rm exchange cmake --build build -j$(nproc)
-```
-
-From here you can either run the services via Compose:
-
-```bash
-# Start exchange + client (requires binaries to be built above)
-docker compose up
-
-# Run the automated benchmark
-docker compose run --rm exchange python3 bench.py
-```
-
-Or work interactively exactly as you would on Linux:
-
-```bash
-# Open a shell inside the container (source is live-mounted at /app)
-docker compose run --rm exchange bash
-
-# Inside the container — normal Linux workflow:
-cmake --build build --target exchange-release -j$(nproc)
-./build/exchange/exchange-release
-```
-
-To change the number of clients, edit the `command` for the `client` service in `docker-compose.yml`, then re-run `docker compose up`.
-
----
-
-## Build
+## Linux Build
 
 ```bash
 # Clone and enter the repo
@@ -127,7 +85,7 @@ cmake --build build --target client-release
 
 ---
 
-## Running
+## Linux Run
 
 Start the exchange first, then start the client in a separate terminal:
 
@@ -144,7 +102,69 @@ Start the exchange first, then start the client in a separate terminal:
 
 Stop both with Ctrl-C. When the exchange stops it prints the latency histograms to stdout. The client prints aggregate throughput stats to stderr.
 
-**Example client output:**
+---
+
+## Docker (macOS / Windows)
+
+The Docker image is a pure Linux build environment. Your source tree is mounted into the container, and the build directory lives in a dedicated named volume — kept separate from any host `./build` so a macOS/Homebrew CMake cache can never collide with the Linux one. Builds persist across runs and you interact with the project exactly as you would on a native Linux machine.
+
+```bash
+# Build the image once (or after changing the Dockerfile)
+docker compose build
+```
+
+Then, whenever you open a terminal, run this one command to enter a Linux shell:
+
+```bash
+docker compose run --rm dev
+```
+
+You are now inside the container at `/app` (your project root). Everything from here is identical to working on Linux:
+
+```bash
+cmake -S . -B build                          # configure (once)
+cmake --build build -j$(nproc)              # build everything
+./build/exchange/exchange-release            # run the exchange
+./build/client/client-release 10            # run the client
+```
+
+**Dedicated exchange / client services:**  
+The Compose file also defines `exchange` and `client` services so you can build and run the two programs with separate commands instead of a shared shell. First build the release binaries once (they persist in the shared `build` volume). Wrap any command using `$(nproc)` in `sh -c '...'` so it expands inside the container rather than your host shell:
+
+```bash
+docker compose run --rm dev cmake -S . -B build                          # configure (once)
+docker compose run --rm dev cmake --build build --target exchange-release
+docker compose run --rm dev cmake --build build --target client-release
+```
+
+Then run each side with its own command:
+
+```bash
+# Terminal 1 — exchange
+docker compose run --rm exchange
+
+# Terminal 2 — client (auto-starts the exchange if it isn't already up)
+docker compose run --rm client          # 10 clients (default)
+docker compose run --rm client 20 42    # 20 clients, fixed seed 42
+```
+
+The client connects to `127.0.0.1`, so its service joins the exchange's network namespace (`network_mode: "service:exchange"`) — no source changes needed. The client's reconnect backoff covers the brief window before the exchange is listening. Stop each with Ctrl-C.
+
+If you prefer a single interactive shell instead, use a named container so a second terminal can attach to it:
+
+```bash
+# Terminal 1 — start a named container
+docker compose run --rm --name sim dev
+# inside: ./build/exchange/exchange-release
+
+# Terminal 2 — attach to the same container
+docker exec -it sim bash
+# inside: ./build/client/client-release 10
+```
+
+---
+
+## Example Client Output
 ```
 === Stats ===
   elapsed         : 15.003 s
@@ -212,14 +232,11 @@ All compile-time configuration lives in header files. A rebuild is required afte
 The script requires the release binaries to already be built. It temporarily modifies `EXPECTED_THROUGHPUT` in `client/config/config.h`, rebuilds `client-release`, runs the pair, and restores the original value on exit regardless of whether it succeeds or fails.
 
 ```bash
-# Run with default 10 clients (native or inside a Docker shell)
+# Run with default 10 clients (native or inside a Docker/dev shell)
 python3 bench.py
 
 # Run with 20 clients
 python3 bench.py --clients 20
-
-# Run via Docker Compose (no shell needed)
-docker compose run --rm exchange python3 bench.py
 ```
 
 Per-run logs are written to `bench_logs/` for post-hoc inspection.
