@@ -26,6 +26,12 @@ struct ClientState {
     uint32_t acks_pending = 0;   // frames sent but not yet responded to
     uint64_t next_send_ns = 0;   // earliest time (CLOCK_MONOTONIC ns) to send next request
 
+    // Reconnect backoff: when fd == -1, the earliest time to attempt reconnect.
+    // Prevents a dropped/refused connection from turning into a tight connect()
+    // spin loop that exhausts ephemeral ports.
+    uint64_t reconnect_at_ns = 0;
+    uint32_t reconnect_backoff_ms = 0;  // linear backoff, capped at RECONNECT_DELAY_MS
+
     // Pending request types: FIFO ring parallel to the in-flight pipeline.
     // pending_tail advances on every send; pending_head on every ACK consumed.
     MessageType pending_types[PIPELINE_DEPTH]{};

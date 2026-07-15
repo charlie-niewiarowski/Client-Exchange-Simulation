@@ -34,6 +34,8 @@
 
 #define PIPELINE_DEPTH 32
 
+#define RINGBUF_SIZE 64 // per-connection outbound staging ring capacity (must be a power of two)
+
 #define LATENCY_SAMPLE_DROP 100'000 // gets rid of cold start's influence
 #define LATENCY_SAMPLE_COUNT (100'000'000 + LATENCY_SAMPLE_DROP) // despite skipping the first X samples we still
                                                               // get the desired number of samples

@@ -5,16 +5,17 @@
 #ifndef UNTITLED_ORDERBOOK_H
 #define UNTITLED_ORDERBOOK_H
 
-#include <map>
 #include <atomic>
 #include <thread>
 
-#include "engine_types.h"
-#include "order_request.h"
+#include "orderbook.h"
 #include "ring_buffer.hpp"
 #include "communication_types.h"
 #include "config.h"
 
+// The Engine is now a thin driver around an autonomous Orderbook. It owns the
+// inbound/outbound ring wiring, the matching thread, and OrderId assignment; it
+// translates each InboundMessage into a Command and routes it to book_.process().
 class Engine {
 
 public:
@@ -31,36 +32,25 @@ public:
 
     #if TESTING
     void step();
-    size_t order_count()     const { return orders_.size(); }
-    size_t bid_level_count() const { return bids_.size(); }
-    size_t ask_level_count() const { return asks_.size(); }
-    size_t bids_at(Price p) const {
-        auto it = bids_.find(p);
-        return it != bids_.end() ? it->second.size() : 0u;
-    }
-    size_t asks_at(Price p) const {
-        auto it = asks_.find(p);
-        return it != asks_.end() ? it->second.size() : 0u;
-    }
-    bool has_order(OrderId id) const { return orders_.contains(id); }
+    size_t order_count()     const { return book_.order_count(); }
+    size_t bid_level_count() const { return book_.bid_level_count(); }
+    size_t ask_level_count() const { return book_.ask_level_count(); }
+    size_t bids_at(Price p)  const { return book_.bids_at(p); }
+    size_t asks_at(Price p)  const { return book_.asks_at(p); }
+    bool has_order(OrderId id) const { return book_.has_order(id); }
     bool pop_outbound(OutboundMessage& msg) { return out_ring_.pop(msg); }
-    bool pop_trade(Trade& t) { return trades_ring_.pop(t); }
+    bool pop_trade(Trade& t) { return book_.pop_trade(t); }
     OrderId next_order_id() const { return next_id_.load(std::memory_order_relaxed); }
     #endif // TESTING
 private:
     //===== threads ======
     std::jthread matching_thread_;
 
-    //===== data containers + facilitating members ======
-    BidLevels bids_;
-    AskLevels asks_;
-    OrderMap orders_;
+    //===== the book ======
+    Orderbook book_;
 
+    //===== id assignment ======
     OrderId next_id_{0};
-    Price best_bid_price_{MIN_PRICE};
-    Price best_ask_price_{MAX_PRICE};
-    size_t non_empty_bid_levels_{0};
-    size_t non_empty_ask_levels_{0};
 
     //===== communication with server ======
     InboundRing& in_ring_;
@@ -72,23 +62,11 @@ private:
     //===== thread entry =====
     void handleMatching();
 
-    //===== state modifications =====
+    //===== request routing =====
     void executeRequest(const InboundMessage &msg);
-    bool addOrder(OrderId id, const OrderRequest &order_request);
-    void cancelOrder(OrderId id);
-    bool modifyOrder(OrderId id, const OrderRequest &order_request);
-
-    void update_best_bid();
-    void update_best_ask();
-
-    //===== matching ======
-    bool matchOrders();
-    bool matchMarket(OrderId id, const OrderRequest& order_request);
-    bool canMatch(Side side, Price price) const;
 
     #if LOGGING
     std::jthread expose_thread_;
-    RingBuffer<Trade> trades_ring_{TRADE_RING_COUNT};
     void exposeTrades();
     #endif
 };

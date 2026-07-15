@@ -64,20 +64,24 @@ void LoadGenerator::run() {
     for (auto& cs : clients_) connectClient(cs);
 
     while (running_.load(std::memory_order_relaxed)) {
+        const uint64_t now = now_ns();
+
+        // Bound the wait by the nearest future deadline: a rate-limited send slot
+        // or a pending reconnect. Disconnected clients (fd == -1) contribute no
+        // epoll events, so without this the loop could sleep past their retry.
+        uint64_t min_deadline = UINT64_MAX;
+        for (const auto& cs : clients_) {
+            if (cs.fd == -1) {
+                min_deadline = std::min(min_deadline, cs.reconnect_at_ns);
+            } else if (inter_arrival_ns_ > 0 && !cs.connecting
+                       && cs.acks_pending < PIPELINE_DEPTH && cs.write_buf.length() == 0) {
+                min_deadline = std::min(min_deadline, cs.next_send_ns);
+            }
+        }
         int timeout_ms = -1;
-        if (inter_arrival_ns_ > 0) {
-            const uint64_t now = now_ns();
-            uint64_t min_deadline = UINT64_MAX;
-            for (const auto& cs : clients_) {
-                if (cs.fd != -1 && !cs.connecting && cs.acks_pending < PIPELINE_DEPTH && cs.write_buf.length() == 0)
-                    min_deadline = std::min(min_deadline, cs.next_send_ns);
-            }
-            if (min_deadline != UINT64_MAX) {
-                const int64_t wait_ns = static_cast<int64_t>(min_deadline)
-                                      - static_cast<int64_t>(now);
-                timeout_ms = wait_ns <= 0 ? 0
-                           : static_cast<int>(wait_ns / 1'000'000);
-            }
+        if (min_deadline != UINT64_MAX) {
+            const int64_t wait_ns = static_cast<int64_t>(min_deadline) - static_cast<int64_t>(now);
+            timeout_ms = wait_ns <= 0 ? 0 : static_cast<int>(wait_ns / 1'000'000);
         }
 
         const int nfds = epoll_wait(epoll_fd_, events_, CLIENT_EPOLL_BATCH, timeout_ms);
@@ -101,6 +105,13 @@ void LoadGenerator::run() {
                 if (cs->fd == -1) continue;  // reconnect happened inside
             }
             if (ev & EPOLLIN) handleReadable(*cs);
+        }
+
+        // Reconnect clients whose backoff has elapsed.
+        const uint64_t after = now_ns();
+        for (auto& cs : clients_) {
+            if (cs.fd == -1 && after >= cs.reconnect_at_ns)
+                connectClient(cs);
         }
 
         // Unblock clients whose inter-arrival slot elapsed while they had no I/O events.
@@ -177,6 +188,7 @@ void LoadGenerator::handleConnect(ClientState& cs) {
     if (err != 0) { reconnect(cs); return; }
 
     cs.connecting = false;
+    cs.reconnect_backoff_ms = 0;  // successful connect resets backoff
     #if LOGGING
     std::fprintf(stderr, "[CONN]  cid:%-6u :: connected\n",
                  static_cast<unsigned>(cs.client_id));
@@ -371,7 +383,14 @@ void LoadGenerator::reconnect(ClientState& cs) {
     // Pending acks will never arrive; correct the in-flight counter.
     cs.orders_in_flight -= static_cast<int64_t>(cs.acks_pending);
     cs.acks_pending = 0;
-    connectClient(cs);
+
+    // Linear backoff, capped at RECONNECT_DELAY_MS. Deferring the reconnect (vs.
+    // calling connectClient() inline) prevents a refused/reset connection from
+    // becoming a tight connect() spin that exhausts ephemeral ports and wedges
+    // the whole netns. The event loop calls connectClient() once the delay is up.
+    if (cs.reconnect_backoff_ms < RECONNECT_DELAY_MS)
+        cs.reconnect_backoff_ms += 50;
+    cs.reconnect_at_ns = now_ns() + static_cast<uint64_t>(cs.reconnect_backoff_ms) * 1'000'000ULL;
 }
 
 //=============================================================================

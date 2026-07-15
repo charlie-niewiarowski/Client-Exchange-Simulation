@@ -5,10 +5,6 @@
 #ifndef ORDER_GATEWAY_MESSAGE_TYPES_HPP
 #define ORDER_GATEWAY_MESSAGE_TYPES_HPP
 
-#include <unordered_map>
-#include <vector>
-#include <memory>
-
 #include "order_types.h"
 
 enum class MessageType : uint8_t { NEW = 0, CANCEL = 1, MODIFY = 2, MATCH = 4};
@@ -45,7 +41,5 @@ struct OutboundMessage { // engine -> gateway
     ServerError server_error;  // 1 byte   @ 54
     uint8_t padding[1];        // 1 byte   @ 55
 }; // 56 bytes (sizeof verified by compiler)
-
-using ClientMessageMap = std::unordered_map<ClientId, std::vector<OutboundMessage>>;
 
 #endif //ORDER_GATEWAY_MESSAGE_TYPES_HPP

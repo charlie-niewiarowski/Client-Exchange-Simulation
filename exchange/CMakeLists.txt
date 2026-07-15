@@ -27,6 +27,7 @@ set(EXCHANGE_SOURCES
         app/main.cpp
         app/exchange.cpp
         engine/src/engine.cpp
+        engine/src/orderbook.cpp
         server/src/buffer.cpp
         server/src/connection_info.cpp
         server/src/server.cpp

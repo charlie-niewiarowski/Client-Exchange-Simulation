@@ -33,12 +33,6 @@ inline constexpr size_t OUTBOUND_BSIZE = 32;
 #define ERROR_STATUS "EXCHANGE\nERROR\n"
 
 //=============================================================================
-// Per-connection outbound ring capacity (must be a power of two)
-//=============================================================================
-
-inline constexpr size_t RINGBUF_SIZE = 64;
-
-//=============================================================================
 // Error string helpers
 //=============================================================================
 

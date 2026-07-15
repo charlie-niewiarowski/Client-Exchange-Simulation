@@ -126,8 +126,18 @@ std::optional<EpollSocket> Server::setupListenSocket() const {
     if (flags == -1) return std::nullopt;
     fcntl(raw_fd, F_SETFL, flags | O_NONBLOCK);
 
-    if (epoll_ctrl(epoll_in_, raw_fd, EPOLL_CTL_ADD, EPOLLIN) == -1) {
-        return std::nullopt;
+    // Level-triggered (NOT edge-triggered): the accept queue must be re-checked
+    // whenever it is non-empty. With EPOLLET a single missed edge (e.g. the queue
+    // never drains to empty) silences the listen socket permanently, refusing all
+    // further connections once the backlog fills.
+    {
+        epoll_event lev{};
+        lev.events  = EPOLLIN;
+        lev.data.fd = raw_fd;
+        if (epoll_ctl(epoll_in_, EPOLL_CTL_ADD, raw_fd, &lev) == -1) {
+            std::cerr << "epoll_ctl (listen) error: " << strerror(errno) << std::endl;
+            return std::nullopt;
+        }
     }
 
     return listen_sock;
@@ -448,8 +458,14 @@ bool Server::sendResponse(const int fd, OutboundState& out) {
 
     while (buf.remaining_to_send() > 0) {
         if (buf.write_to(fd) <= 0) {
-            if ((errno == EAGAIN || errno == EWOULDBLOCK) && !epollout_armed_[fd]) {
-                epollout_armed_[fd] = (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0);
+            // EAGAIN/EWOULDBLOCK is not fatal: the socket send buffer is full
+            // (slow client). Arm EPOLLOUT and report success so the caller keeps
+            // the connection and retries when the socket is writable again.
+            // Only a genuine send error should condemn the connection.
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (!epollout_armed_[fd])
+                    epollout_armed_[fd] = (epoll_ctrl(epoll_out_, fd, EPOLL_CTL_ADD, EPOLLIN | EPOLLOUT) == 0);
+                return true;
             }
             return false;
         }
@@ -567,7 +583,13 @@ void Server::condemnConnection(const int fd, const bool caller_inbound) {
 
 static int epoll_ctrl(const int epoll_fd, const int fd, const int op, const int target) {
     epoll_event ev{};
-    ev.events  = target | EPOLLET;
+    // Level-triggered (no EPOLLET). The inbound/outbound threads poll with a zero
+    // timeout, so there is no benefit to edge-triggering, and edge mode silently
+    // drops readiness whenever a socket buffer is not drained to EAGAIN before we
+    // stop reading, or when data/connections arrive between accept() and register.
+    // Those missed edges wedge the connection (and, on the listen socket, refuse
+    // all further clients) — reliably reproducible under emulation.
+    ev.events  = target;
     ev.data.fd = fd;
 
     if (epoll_ctl(epoll_fd, op, fd, &ev) == -1) {

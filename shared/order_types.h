@@ -5,6 +5,8 @@
 #ifndef TYPES_H
 #define TYPES_H
 
+#include <cstdint>
+
 using Timestamp = uint64_t;
 using ClientId = uint32_t;
 enum class Side : uint8_t { BID, ASK };
