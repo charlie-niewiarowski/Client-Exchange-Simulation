@@ -2,10 +2,10 @@
 // Created by charl on 1/13/2026.
 //
 
-#include "../include/server.h"
-#include "../include/latency.h"
-#include "../include/validation.h"
-#include "lib.h"
+#include "../include/server.hpp"
+#include "../include/latency.hpp"
+#include "../include/validation.hpp"
+#include "lib.hpp"
 
 #include <cstring>
 #include <immintrin.h>

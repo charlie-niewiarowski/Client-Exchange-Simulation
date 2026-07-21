@@ -5,9 +5,9 @@
 #ifndef TOYEXCHANGE_ORDERGATEWAY_HPP
 #define TOYEXCHANGE_ORDERGATEWAY_HPP
 
- #include "connection_info.h"
-#include "communication_types.h"
-#include "config.h"
+ #include "connection_info.hpp"
+#include "communication_types.hpp"
+#include "config.hpp"
 #include "ring_buffer.hpp"
 
 #include <array>

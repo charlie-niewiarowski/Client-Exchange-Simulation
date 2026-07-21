@@ -6,8 +6,8 @@
 #include <iostream>
 #include <thread>
 
-#include "../include/engine.h"
-#include "lib.h"
+#include "../include/engine.hpp"
+#include "lib.hpp"
 
 //=============================================================================
 // Forward-declared free forms
@@ -85,8 +85,8 @@ void Engine::exposeTrades() {
 //=============================================================================
 //
 // The Engine assigns OrderIds for NEW orders, packages the inbound message into
-// a Command, and routes it to the autonomous Orderbook. The book performs the
-// add/cancel/modify/match and pushes any MATCH fills onto the outbound ring
+// an OrderRequest, and routes it to the autonomous Orderbook. The book performs
+// the add/cancel/modify/match and pushes any MATCH fills onto the outbound ring
 // itself; it returns a ProcessResult telling us whether (and how) to ack.
 void Engine::executeRequest(const InboundMessage &msg) {
 #if DIAGNOSTICS
@@ -96,22 +96,22 @@ void Engine::executeRequest(const InboundMessage &msg) {
     // For NEW orders assign the id now so it can be returned in the response.
     const OrderId assigned_id = (msg.message_type == MessageType::NEW) ? next_id_++ : msg.order_id;
 
-    const Command cmd{
-        .type       = msg.message_type,
-        .order_id   = assigned_id,
-        .client_id  = msg.client_id,
-        .side       = msg.side,
-        .order_type = msg.order_type,
-        .price      = msg.price,
-        .quantity   = msg.quantity,
+    const OrderRequest req{
+        msg.message_type,
+        assigned_id,
+        msg.client_id,
+        msg.side,
+        msg.order_type,
+        msg.price,
+        msg.quantity,
 #if DIAGNOSTICS
-        .recv_tsc        = msg.recv_tsc,
-        .server_push_tsc = msg.server_push,
-        .engine_pop_tsc  = engine_pop_tsc,
+        msg.recv_tsc,
+        msg.server_push,
+        engine_pop_tsc,
 #endif
     };
 
-    const ProcessResult res = book_.process(cmd);
+    const ProcessResult res = book_.process(req);
 
     if (!res.suppress_ack) {
         OutboundMessage outbound_msg{

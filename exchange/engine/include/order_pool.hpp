@@ -14,9 +14,9 @@
 #ifndef ORDER_POOL_H
 #define ORDER_POOL_H
 
-#include "order.h"
-#include "order_request.h"
-#include "order_types.h"
+#include "order.hpp"
+#include "order_request.hpp"
+#include "order_types.hpp"
 
 #include <cstddef>
 #include <vector>

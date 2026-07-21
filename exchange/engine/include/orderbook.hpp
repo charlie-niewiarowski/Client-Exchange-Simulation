@@ -5,25 +5,25 @@
 // PriceLevelQueues, and the OrderId -> Order* lookup map) and all of the
 // mutating logic: adding, cancelling, modifying, and matching orders.
 //
-// It is driven exclusively through process(Command): the Engine translates each
-// inbound wire message into a Command and hands it over. Matching results
-// (MATCH fills) are pushed directly onto the outbound ring the Orderbook was
-// constructed with; process() returns a ProcessResult telling the caller how to
-// acknowledge the command.
+// It is driven exclusively through process(OrderRequest): the Engine translates
+// each inbound wire message into an OrderRequest and hands it over. Matching
+// results (MATCH fills) are pushed directly onto the outbound ring the Orderbook
+// was constructed with; process() returns a ProcessResult telling the caller how
+// to acknowledge the request.
 //
 
 #ifndef ORDERBOOK_H
 #define ORDERBOOK_H
 
-#include "order.h"
-#include "price_level_queue.h"
-#include "order_pool.h"
-#include "order_request.h"
-#include "order_types.h"
-#include "communication_types.h"
+#include "order.hpp"
+#include "price_level_queue.hpp"
+#include "order_pool.hpp"
+#include "order_request.hpp"
+#include "order_types.hpp"
+#include "communication_types.hpp"
 #include "ring_buffer.hpp"
-#include "trade.h"
-#include "config.h"
+#include "trade.hpp"
+#include "config.hpp"
 
 #include <array>
 #include <unordered_map>
@@ -33,7 +33,7 @@
 //=============================================================================
 //
 // The map does NOT own the Order objects — it stores non-owning pointers into
-// the OrderPool arena. Ownership is centralised in the pool (see order_pool.h).
+// the OrderPool arena. Ownership is centralised in the pool (see order_pool.hpp).
 // The bid/ask arrays are indexed by (price - MIN_PRICE): one PriceLevelQueue
 // per tick.
 
@@ -42,33 +42,10 @@ using BidLevels = std::array<PriceLevelQueue, MAX_PRICE - MIN_PRICE + 1>;
 using AskLevels = std::array<PriceLevelQueue, MAX_PRICE - MIN_PRICE + 1>;
 
 //=============================================================================
-// Command — the single input to the Orderbook
+// ProcessResult — how the caller should acknowledge a processed request
 //=============================================================================
 //
-// Carries the assigned OrderId (the Engine assigns ids for NEW orders) and all
-// fields required to add/cancel/modify. Diagnostic timestamps are only present
-// under DIAGNOSTICS, mirroring OrderRequest.
-
-struct Command {
-    MessageType type;
-    OrderId     order_id;
-    ClientId    client_id;
-    Side        side;
-    OrderType   order_type;
-    Price       price;
-    Quantity    quantity;
-#if DIAGNOSTICS
-    Timestamp   recv_tsc;
-    Timestamp   server_push_tsc;
-    Timestamp   engine_pop_tsc;
-#endif
-};
-
-//=============================================================================
-// ProcessResult — how the caller should acknowledge a processed Command
-//=============================================================================
-//
-// suppress_ack is true when the command produced MATCH messages instead of a
+// suppress_ack is true when the request produced MATCH messages instead of a
 // plain acknowledgement (the fills were already pushed onto the outbound ring).
 
 struct ProcessResult {
@@ -91,8 +68,8 @@ public:
 
     ~Orderbook() = default;
 
-    // Route point: apply a single command to the book.
-    ProcessResult process(const Command& cmd);
+    // Route point: apply a single request to the book.
+    ProcessResult process(const OrderRequest& req);
 
 #if LOGGING
     // Drain a trade produced by matching (consumed by the Engine's expose thread).
@@ -127,16 +104,16 @@ private:
 #endif
 
     //===== state modifications =====
-    bool addOrder(OrderId id, const OrderRequest& order_request);
+    bool addOrder(const OrderRequest& order_request);
     void cancelOrder(OrderId id);
-    bool modifyOrder(OrderId id, const OrderRequest& order_request);
+    bool modifyOrder(const OrderRequest& order_request);
 
     void update_best_bid();
     void update_best_ask();
 
     //===== matching ======
     bool matchOrders();
-    bool matchMarket(OrderId id, const OrderRequest& order_request);
+    bool matchMarket(const OrderRequest& order_request);
     bool canMatch(Side side, Price price) const;
 };
 

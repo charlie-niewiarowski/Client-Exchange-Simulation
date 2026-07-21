@@ -13,8 +13,8 @@
 // the rings.  Tests are run sequentially to avoid port conflicts.
 //
 
-#include "test_runner.h"
-#include "server_fixture.h"
+#include "test_runner.hpp"
+#include "server_fixture.hpp"
 
 //=============================================================================
 // Parse Request

@@ -31,7 +31,7 @@ ROOT         = Path(__file__).resolve().parent
 BUILD_DIR    = ROOT / "cmake-build-debug"
 EXCHANGE_BIN = BUILD_DIR / "exchange" / "exchange-release"
 CLIENT_BIN   = BUILD_DIR / "client"   / "client-release"
-CLIENT_CFG   = ROOT / "client" / "config" / "config.h"
+CLIENT_CFG   = ROOT / "client" / "config" / "config.hpp"
 LOG_DIR      = ROOT / "bench_logs"
 
 # benchmark parameters
@@ -46,7 +46,7 @@ LEVELS = [
     dict(name="3.5M",  target=3_500_000, tolerance=250_000),
 ]
 
-# Percentile labels as emitted by print_hist() in latency.h
+# Percentile labels as emitted by print_hist() in latency.hpp
 PCTS = ["p50", "p90", "p99", "p99.9", "p99.99", "max"]
 
 # Desired display order; any extra sections found are appended after.
@@ -67,7 +67,7 @@ _THROUGHPUT_RE = re.compile(r"(#define EXPECTED_THROUGHPUT)\s+([\d'_]+)")
 
 
 def read_throughput_token() -> str:
-    """Return the raw token currently in config.h (e.g. "500'000")."""
+    """Return the raw token currently in config.hpp (e.g. "500'000")."""
     m = _THROUGHPUT_RE.search(CLIENT_CFG.read_text())
     return m.group(2) if m else "0"
 

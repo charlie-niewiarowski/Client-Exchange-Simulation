@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "order_types.h"
+#include "order_types.hpp"
 
 struct TradeInfo { // used to output results
     ClientId client_id_;

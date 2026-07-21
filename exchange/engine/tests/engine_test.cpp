@@ -7,8 +7,8 @@
 // so there is no shared state between tests.
 //
 
-#include "test_runner.h"
-#include "../include/engine.h"
+#include "test_runner.hpp"
+#include "../include/engine.hpp"
 
 // ── Message helpers ───────────────────────────────────────────────────────────
 

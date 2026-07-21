@@ -5,11 +5,12 @@
 #ifndef TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP
 #define TOYEXCHANGE_ORDER_GATEWAY_TYPES_HPP
 
-#include "protocol.h"
-#include "socket.h"
-#include "buffer.h"
+#include "protocol.hpp"
+#include "socket.hpp"
+#include "buffer.hpp"
 #include "ring_buffer.hpp"
-#include "config.h"
+#include "latency.hpp"
+#include "config.hpp"
 
 #include <array>
 
@@ -28,20 +29,6 @@ using StagingQueue = RingBuffer<OutboundMessage>;
 struct PendingError {
     int fd;
     ServerError err;
-};
-
-//=============================================================================
-// PendingLatency
-//=============================================================================
-
-struct PendingLatency {
-    Timestamp read_begin_tsc;   // t0 - always set
-    Timestamp recv_tsc;         // t1 - set under DIAGNOSTICS
-    Timestamp server_push_tsc;  // t2 - set under DIAGNOSTICS
-    Timestamp engine_pop_tsc;   // t3 - set under DIAGNOSTICS
-    Timestamp engine_push_tsc;  // t4 - set under DIAGNOSTICS
-    Timestamp server_pop;       // t5 - set under DIAGNOSTICS
-    bool record;
 };
 
 //=============================================================================

@@ -8,14 +8,14 @@
 #include <atomic>
 #include <thread>
 
-#include "orderbook.h"
+#include "orderbook.hpp"
 #include "ring_buffer.hpp"
-#include "communication_types.h"
-#include "config.h"
+#include "communication_types.hpp"
+#include "config.hpp"
 
 // The Engine is now a thin driver around an autonomous Orderbook. It owns the
 // inbound/outbound ring wiring, the matching thread, and OrderId assignment; it
-// translates each InboundMessage into a Command and routes it to book_.process().
+// translates each InboundMessage into an OrderRequest and routes it to book_.process().
 class Engine {
 
 public:

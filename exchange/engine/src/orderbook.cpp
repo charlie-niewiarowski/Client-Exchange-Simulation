@@ -1,13 +1,13 @@
 //
-// Orderbook — autonomous price-time-priority book (see orderbook.h).
+// Orderbook — autonomous price-time-priority book (see orderbook.hpp).
 //
 // The add/cancel/modify/match logic here was previously owned by the Engine; it
-// now lives entirely inside the book, reached through process(Command).
+// now lives entirely inside the book, reached through process(OrderRequest).
 //
 
 #include <algorithm>
 
-#include "../include/orderbook.h"
+#include "../include/orderbook.hpp"
 
 #if LOGGING
 #include <iostream>
@@ -26,43 +26,33 @@ Orderbook::Orderbook(OutboundRing& out_ring)
 // process() — the single entry point
 //=============================================================================
 
-ProcessResult Orderbook::process(const Command& cmd) {
-    switch (cmd.type) {
+ProcessResult Orderbook::process(const OrderRequest& req) {
+    switch (req.get_message_type()) {
         case MessageType::NEW:
-            return { Status::SUCCESS, addOrder(cmd.order_id, OrderRequest{
-                cmd.client_id, cmd.side, cmd.order_type, cmd.price, cmd.quantity
-#if DIAGNOSTICS
-                , cmd.recv_tsc, cmd.server_push_tsc, cmd.engine_pop_tsc
-#endif
-            }) };
+            return { Status::SUCCESS, addOrder(req) };
 
         case MessageType::CANCEL: {
-            const auto it = orders_.find(cmd.order_id);
-            if (it == orders_.end() || it->second->client_id_ != cmd.client_id) {
+            const auto it = orders_.find(req.get_order_id());
+            if (it == orders_.end() || it->second->client_id_ != req.get_clientId()) {
                 return { Status::FAILURE, false };
             }
-            cancelOrder(cmd.order_id);
+            cancelOrder(req.get_order_id());
             return { Status::SUCCESS, false };
         }
 
         case MessageType::MODIFY: {
-            const auto it = orders_.find(cmd.order_id);
+            const auto it = orders_.find(req.get_order_id());
             if (it == orders_.end()
-                    || it->second->client_id_ != cmd.client_id
-                    || it->second->side_ != cmd.side) {
+                    || it->second->client_id_ != req.get_clientId()
+                    || it->second->side_ != req.get_side()) {
                 return { Status::FAILURE, false };
             }
-            return { Status::SUCCESS, modifyOrder(cmd.order_id, OrderRequest{
-                cmd.client_id, cmd.side, cmd.order_type, cmd.price, cmd.quantity
-#if DIAGNOSTICS
-                , cmd.recv_tsc, cmd.server_push_tsc, cmd.engine_pop_tsc
-#endif
-            }) };
+            return { Status::SUCCESS, modifyOrder(req) };
         }
 
         default:
             #if LOGGING
-            std::cerr << "orderbook: command with unknown type\n";
+            std::cerr << "orderbook: request with unknown type\n";
             #endif
             return { Status::FAILURE, false };
     }
@@ -72,11 +62,12 @@ ProcessResult Orderbook::process(const Command& cmd) {
 // state modifications
 //=============================================================================
 
-bool Orderbook::addOrder(OrderId id, const OrderRequest& order_request) {
+bool Orderbook::addOrder(const OrderRequest& order_request) {
     if (order_request.get_type() == OrderType::MARKET) {
-        return matchMarket(id, order_request);
+        return matchMarket(order_request);
     }
 
+    const OrderId id = order_request.get_order_id();
     if (orders_.contains(id)) return false;
 
     Order* order_ptr = pool_.allocate(id, order_request);
@@ -121,14 +112,15 @@ void Orderbook::cancelOrder(const OrderId id) {
     pool_.deallocate(order);   // return the slot to the pool for reuse
 }
 
-bool Orderbook::modifyOrder(const OrderId id, const OrderRequest& order_request) {
+bool Orderbook::modifyOrder(const OrderRequest& order_request) {
+    const OrderId id = order_request.get_order_id();
     Order* order = orders_.at(id);
 
     const auto new_price = order_request.get_price();
     const auto new_quantity = order_request.get_quantity();
     if (new_price != order->price_ || new_quantity != order->initial_quantity_) {
         cancelOrder(id);
-        return addOrder(id, order_request);
+        return addOrder(order_request);
     }
 
     // Same price and quantity: update only timestamps so prev_/next_ links are preserved.
@@ -138,7 +130,7 @@ bool Orderbook::modifyOrder(const OrderId id, const OrderRequest& order_request)
     order->engine_pop_tsc  = order_request.get_engine_in_tsc();
 #endif
     if (order_request.get_type() == OrderType::MARKET) {
-        return matchMarket(id, order_request);
+        return matchMarket(order_request);
     }
 
     return matchOrders();
@@ -243,7 +235,8 @@ bool Orderbook::matchOrders() {
     return any_filled;
 }
 
-bool Orderbook::matchMarket(OrderId id, const OrderRequest& order_request) {
+bool Orderbook::matchMarket(const OrderRequest& order_request) {
+    const OrderId id = order_request.get_order_id();
     auto remaining{order_request.get_quantity()};
 
     if (order_request.get_side() == Side::BID) {

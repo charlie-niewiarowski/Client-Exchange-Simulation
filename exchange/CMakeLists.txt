@@ -13,7 +13,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(hdr_histogram)
 
 add_library(common_lib INTERFACE
-        include/lib.h)
+        include/lib.hpp)
 target_include_directories(common_lib INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../shared
@@ -28,7 +28,6 @@ set(EXCHANGE_SOURCES
         app/exchange.cpp
         engine/src/engine.cpp
         engine/src/orderbook.cpp
-        server/src/buffer.cpp
         server/src/connection_info.cpp
         server/src/server.cpp
 )

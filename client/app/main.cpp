@@ -12,8 +12,8 @@
 // Runs until SIGINT / SIGTERM, then prints aggregate stats and throughput.
 //
 
-#include "../include/load_generator.h"
-#include "../config/config.h"
+#include "../include/load_generator.hpp"
+#include "../config/config.hpp"
 
 #include <csignal>
 #include <cstdio>

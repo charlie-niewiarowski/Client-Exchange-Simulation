@@ -99,16 +99,76 @@ line from `exchange/config/config.h`. (Both were untouched by earlier tasks.)
 
 ---
 
-## Considered but NOT changed (tell me if you want these)
+## Change 5 — remove empty `server/src/buffer.cpp` placeholder
 
-- **`server/src/buffer.cpp`** is an empty placeholder (Buffer is header-only).
-  Left as-is because a comment marks it intentional; could be removed along with
-  its `CMakeLists.txt` entry.
-- **`.hpp` vs `.h` extension inconsistency** (`ring_buffer.hpp`, `buffer.h`,
-  etc.). Left alone — renaming churns many `#include`s for no functional gain.
-- **`OrderRequest` vs `Command` overlap** — both now carry
-  client/side/type/price/qty/timestamps. Merging them is a *design* decision
-  (mid-refactor), so I left `order_request.h` standalone rather than pre-empt it.
-- **`PendingLatency`** lives in `connection_info.h` but is a latency concept;
-  left there because `OutboundState` embeds it (moving it would just add a
-  cross-include).
+**What:** Deleted `exchange/server/src/buffer.cpp` and dropped its entry from
+`exchange/CMakeLists.txt`'s `EXCHANGE_SOURCES`.
+**Why:** Buffer is a header-only template (`buffer.hpp`); the `.cpp` was an empty
+placeholder kept only so the CMake source list "did not need to change." Removing
+the source and its build entry is the honest version of that.
+
+**Files:** `D exchange/server/src/buffer.cpp`, modified `exchange/CMakeLists.txt`.
+
+---
+
+## Change 6 — standardise all headers on `.hpp`
+
+**What:** Renamed every project header from `.h` to `.hpp` (via `git mv`, so
+history follows), and updated every quoted `#include`, the `common_lib`
+`lib.hpp` entry in `exchange/CMakeLists.txt`, the `config.hpp` path read by
+`bench.py`, and the filename references in the `README.md` layout section.
+System includes (`<pthread.h>`, `<sched.h>`, `<hdr/…>`) are untouched.
+**Why:** The tree mixed `ring_buffer.hpp` with `.h` for every other header. One
+extension across the codebase removes the "which is it?" friction. `.hpp` was
+chosen to match the existing outlier and to read unambiguously as C++.
+
+**Files:** all `exchange/`, `client/`, and `shared/` headers renamed; every
+`.cpp`/`.hpp` include updated; `exchange/CMakeLists.txt`, `client/CMakeLists.txt`,
+`bench.py`, `README.md` reference updates.
+
+---
+
+## Change 7 — merge `Command` into `OrderRequest` (one object)
+
+**What:** Deleted the `Command` struct from `orderbook.hpp` and folded its two
+extra fields (`MessageType message_type`, `OrderId order_id`) into
+`OrderRequest`. `OrderRequest` is now the single object the Engine builds and
+hands to the book:
+
+- `Orderbook::process()` takes `const OrderRequest&` and reads `message_type` /
+  `order_id` via getters instead of re-packing a fresh `OrderRequest`.
+- `addOrder` / `modifyOrder` / `matchMarket` lost their redundant `OrderId id`
+  parameter — the id now travels inside the request (`get_order_id()`).
+- `engine.cpp` builds one `OrderRequest` directly from the `InboundMessage`
+  instead of a `Command`.
+
+**Why:** The two types had fully overlapping payloads; keeping both meant every
+message was copied twice on the hot path. Collapsing to one carrier removes the
+duplication and makes `OrderRequest` the genuine single input to the book.
+
+**Files:** modified `order_request.hpp`, `orderbook.hpp`, `orderbook.cpp`,
+`engine.cpp`, `engine.hpp` (comment).
+
+---
+
+## Change 8 — move `PendingLatency` to `latency.hpp`
+
+**What:** Moved the `PendingLatency` struct out of `connection_info.hpp` and into
+`latency.hpp` (next to `LatencySample`), and added the now-needed
+`#include "latency.hpp"` to `connection_info.hpp`. Also gave `latency.hpp` an
+explicit `#include "order_types.hpp"` for `Timestamp` (previously relied on the
+includer).
+**Why:** `PendingLatency` is a latency concept, not connection state; it belongs
+with the other latency types. `OutboundState` still embeds it, which is why the
+one added cross-include is unavoidable — and worth it for the clearer home.
+
+**Files:** modified `latency.hpp`, `connection_info.hpp`.
+
+---
+
+## Verification
+
+`exchange-release` and `client-release` both build clean (Docker, Ubuntu 24.04).
+A 4-client seeded run (`seed 42`) reproduces the baseline: **258 ACK**, **506
+MATCH** (the 2-short vs the prior 508 is only the `SIGINT` landing mid-pair),
+**0 ERR**.

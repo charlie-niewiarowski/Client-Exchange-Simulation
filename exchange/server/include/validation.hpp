@@ -5,7 +5,7 @@
 #ifndef VALIDATION_H
 #define VALIDATION_H
 
-#include "communication_types.h"
+#include "communication_types.hpp"
 
 inline bool validate_new(const InboundMessage &msg) {
     auto raw_type = static_cast<uint8_t>(msg.message_type);

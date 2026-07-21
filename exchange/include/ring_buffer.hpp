@@ -9,7 +9,7 @@
 #include <atomic>
 #include <cassert>
 
-#include "communication_types.h"
+#include "communication_types.hpp"
 
 template <typename T>
 class RingBuffer {
