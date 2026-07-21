@@ -27,7 +27,7 @@ Client-Exchange-Simulation/
     src/          LoadGenerator (epoll event loop)
     include/      ClientState, LoadGenerator, OrderFactory
     config/       client/config/config.hpp  -- all compile-time knobs
-  shared/         Wire types used by both programs
+  infra/          Wire types used by both programs
     protocol.hpp    Frame sizes, status prefixes, error strings
     communication_types.hpp  InboundMessage, OutboundMessage structs
     order_types.hpp  Primitive type aliases (Price, Quantity, OrderId, etc.)

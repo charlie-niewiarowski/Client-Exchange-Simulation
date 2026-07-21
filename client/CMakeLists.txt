@@ -18,11 +18,11 @@ target_compile_options(client-debug PRIVATE -g -march=native)
 target_include_directories(client-release PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include   # order_factory.hpp, client_state.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/config    # config.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../shared # protocol headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../infra  # protocol headers
 )
 
 target_include_directories(client-debug PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include   # order_factory.hpp, client_state.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/config    # config.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../shared # protocol headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../infra  # protocol headers
 )
