@@ -1,10 +1,10 @@
 //
-// Isolation tests for the four validation functions in validation.h.
+// Isolation tests for the four validation functions in validation.hpp.
 // No networking — pure logic, runs instantly.
 //
 
-#include "test_runner.h"
-#include "../include/validation.h"
+#include "test_runner.hpp"
+#include "../include/validation.hpp"
 
 //=============================================================================
 // Helpers

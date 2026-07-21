@@ -2,8 +2,8 @@
 // Created by cniew on 5/24/26.
 //
 
-#include "../include/load_generator.h"
-#include "../include/order_factory.h"
+#include "../include/load_generator.hpp"
+#include "../include/order_factory.hpp"
 
 #include <arpa/inet.h>
 #include <netinet/tcp.h>

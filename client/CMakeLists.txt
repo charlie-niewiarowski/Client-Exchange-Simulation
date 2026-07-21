@@ -16,13 +16,13 @@ target_compile_options(client-release PRIVATE -O3 -march=native)
 target_compile_options(client-debug PRIVATE -g -march=native)
 
 target_include_directories(client-release PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include   # order_factory.h, client_state.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/config    # config.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include   # order_factory.hpp, client_state.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/config    # config.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../shared # protocol headers
 )
 
 target_include_directories(client-debug PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include   # order_factory.h, client_state.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/config    # config.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include   # order_factory.hpp, client_state.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/config    # config.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../shared # protocol headers
 )

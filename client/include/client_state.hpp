@@ -5,10 +5,10 @@
 #ifndef CLIENT_STATE_H
 #define CLIENT_STATE_H
 
-#include "buffer.h"
-#include "communication_types.h"
-#include "protocol.h"
-#include "../config/config.h"
+#include "buffer.hpp"
+#include "communication_types.hpp"
+#include "protocol.hpp"
+#include "../config/config.hpp"
 
 struct ClientState {
     //===== identity =====

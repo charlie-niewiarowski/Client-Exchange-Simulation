@@ -5,9 +5,9 @@
 #ifndef UNTITLED_ORDERBOOK_HPP
 #define UNTITLED_ORDERBOOK_HPP
 
-#include "../engine/include/engine.h"
-#include "../server/include/server.h"
-#include "config.h"
+#include "../engine/include/engine.hpp"
+#include "../server/include/server.hpp"
+#include "config.hpp"
 
 class Exchange {
 public:

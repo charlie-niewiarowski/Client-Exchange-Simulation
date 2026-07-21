@@ -1,7 +1,7 @@
 //
 // Comprehensive integration test: multiple clients, mixed valid/invalid requests.
 //
-// The outbound ring is fed by FakeEngine (see server_fixture.h), which echoes
+// The outbound ring is fed by FakeEngine (see server_fixture.hpp), which echoes
 // every inbound order back as a SUCCESS response.  The test verifies the full
 // pipeline end-to-end: TCP accept → read → parse → validate → ring I/O →
 // serialize → send → client receives correct bytes.
@@ -16,8 +16,8 @@
 //  Client F (cid=6)  — valid NEW BID followed immediately by an invalid request
 //
 
-#include "test_runner.h"
-#include "server_fixture.h"
+#include "test_runner.hpp"
+#include "server_fixture.hpp"
 
 #include <cassert>
 #include <vector>

@@ -5,7 +5,7 @@
 #ifndef ORDER_GATEWAY_MESSAGE_TYPES_HPP
 #define ORDER_GATEWAY_MESSAGE_TYPES_HPP
 
-#include "order_types.h"
+#include "order_types.hpp"
 
 enum class MessageType : uint8_t { NEW = 0, CANCEL = 1, MODIFY = 2, MATCH = 4};
 

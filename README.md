@@ -21,17 +21,17 @@ Client-Exchange-Simulation/
     engine/       Matching engine (order book, matching logic, tests)
     server/       TCP gateway (epoll inbound/outbound threads, tests)
     include/      Shared lock-free ring buffer
-    config/       exchange/config/config.h  -- all compile-time knobs
+    config/       exchange/config/config.hpp  -- all compile-time knobs
   client/
     app/          Client entry point
     src/          LoadGenerator (epoll event loop)
     include/      ClientState, LoadGenerator, OrderFactory
-    config/       client/config/config.h  -- all compile-time knobs
+    config/       client/config/config.hpp  -- all compile-time knobs
   shared/         Wire types used by both programs
-    protocol.h    Frame sizes, status prefixes, error strings
-    communication_types.h  InboundMessage, OutboundMessage structs
-    order_types.h  Primitive type aliases (Price, Quantity, OrderId, etc.)
-    buffer.h      Header-only fixed-capacity byte buffer
+    protocol.hpp    Frame sizes, status prefixes, error strings
+    communication_types.hpp  InboundMessage, OutboundMessage structs
+    order_types.hpp  Primitive type aliases (Price, Quantity, OrderId, etc.)
+    buffer.hpp      Header-only fixed-capacity byte buffer
   bench.py        Automated multi-level latency benchmark
   CMakeLists.txt  Root build file
 ```
@@ -187,7 +187,7 @@ docker exec -it sim bash
 
 All compile-time configuration lives in header files. A rebuild is required after changes.
 
-### Exchange: `exchange/config/config.h`
+### Exchange: `exchange/config/config.hpp`
 
 | Macro | Default | Description |
 |---|---|---|
@@ -206,7 +206,7 @@ All compile-time configuration lives in header files. A rebuild is required afte
 | `LATENCY_SAMPLE_COUNT` | `100000000` | How many samples to collect before stopping |
 | `LATENCY_SAMPLE_DROP` | `100000` | Cold-start samples to discard before recording |
 
-### Client: `client/config/config.h`
+### Client: `client/config/config.hpp`
 
 | Macro | Default | Description |
 |---|---|---|
@@ -229,7 +229,7 @@ All compile-time configuration lives in header files. A rebuild is required afte
 
 `bench.py` runs a multi-level latency benchmark at 250k, 1M, and 3.5M orders/s. For each level it collects 5 valid 15-second samples (discarding runs that fall outside a tolerance band), averages the HDR histogram percentiles across the valid samples, and prints a summary table.
 
-The script requires the release binaries to already be built. It temporarily modifies `EXPECTED_THROUGHPUT` in `client/config/config.h`, rebuilds `client-release`, runs the pair, and restores the original value on exit regardless of whether it succeeds or fails.
+The script requires the release binaries to already be built. It temporarily modifies `EXPECTED_THROUGHPUT` in `client/config/config.hpp`, rebuilds `client-release`, runs the pair, and restores the original value on exit regardless of whether it succeeds or fails.
 
 ```bash
 # Run with default 10 clients (native or inside a Docker/dev shell)
@@ -307,4 +307,4 @@ Rate limiting is controlled by `EXPECTED_THROUGHPUT`: when set to a non-zero val
 
 ## Tests
 
-Test files exist under `exchange/engine/tests/` and `exchange/server/tests/` but are not actively maintained and may be out of date. They are guarded by `#define TESTING 1` in `exchange/config/config.h`.
+Test files exist under `exchange/engine/tests/` and `exchange/server/tests/` but are not actively maintained and may be out of date. They are guarded by `#define TESTING 1` in `exchange/config/config.hpp`.

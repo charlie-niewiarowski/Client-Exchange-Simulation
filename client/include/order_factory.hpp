@@ -21,9 +21,9 @@
 #ifndef ORDER_FACTORY_H
 #define ORDER_FACTORY_H
 
-#include "communication_types.h"
-#include "protocol.h"
-#include "config.h"
+#include "communication_types.hpp"
+#include "protocol.hpp"
+#include "config.hpp"
 
 #include <random>
 #include <cmath>

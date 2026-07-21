@@ -15,8 +15,8 @@
 #ifndef ORCHESTRATOR_H
 #define ORCHESTRATOR_H
 
-#include "client_state.h"
-#include "../config/config.h"
+#include "client_state.hpp"
+#include "../config/config.hpp"
 
 #include <atomic>
 #include <random>

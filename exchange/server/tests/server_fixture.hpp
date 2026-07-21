@@ -5,8 +5,8 @@
 #ifndef SERVER_FIXTURE_H
 #define SERVER_FIXTURE_H
 
-#include "../include/server.h"
-#include "../include/protocol.h"
+#include "../include/server.hpp"
+#include "../include/protocol.hpp"
 
 #include <atomic>
 #include <thread>

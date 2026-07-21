@@ -13,7 +13,8 @@
 #include <vector>
 #include <hdr/hdr_histogram.h>
 
-#include "config.h"
+#include "config.hpp"
+#include "order_types.hpp"
 
 struct LatencySample {
     Timestamp t0, // read begins  (before recv syscall)
@@ -24,6 +25,20 @@ struct LatencySample {
     t5, // server popped outbound ring
     t6, // write begins  (before send syscall)
     t7; // write finished (after send syscall)
+};
+
+//=============================================================================
+// PendingLatency  (SPSC channel element: inbound thread → outbound thread)
+//=============================================================================
+
+struct PendingLatency {
+    Timestamp read_begin_tsc;   // t0 - always set
+    Timestamp recv_tsc;         // t1 - set under DIAGNOSTICS
+    Timestamp server_push_tsc;  // t2 - set under DIAGNOSTICS
+    Timestamp engine_pop_tsc;   // t3 - set under DIAGNOSTICS
+    Timestamp engine_push_tsc;  // t4 - set under DIAGNOSTICS
+    Timestamp server_pop;       // t5 - set under DIAGNOSTICS
+    bool record;
 };
 
 class LatencyHandler {
