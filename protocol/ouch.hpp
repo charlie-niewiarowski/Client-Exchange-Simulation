@@ -80,6 +80,7 @@ enum class InboundType : char { // participant -> host
     CancelOrder  = 'X',
     ModifyOrder  = 'M', // priority-preserving: side flip / quantity reduction only
     MassCancel   = 'C',
+    AccountQuery = 'Q', // request the next available UserRefNum (state recovery)
 };
 
 enum class OutboundType : char { // host -> participant
@@ -231,6 +232,12 @@ struct MassCancel {
     AppendageLength appendage_length = 0;        // 17
 };                                               // 19 bytes
 
+// Type Q - Account Query Request
+struct AccountQuery {
+    InboundType type = InboundType::AccountQuery; //  0
+    AppendageLength appendage_length = 0;         //  1
+};                                                //  3 bytes
+
 #pragma pack(pop)
 
 static_assert(sizeof(EnterOrder)   == 43);
@@ -238,6 +245,7 @@ static_assert(sizeof(ReplaceOrder) == 36);
 static_assert(sizeof(CancelOrder)  == 11);
 static_assert(sizeof(ModifyOrder)  == 12);
 static_assert(sizeof(MassCancel)   == 19);
+static_assert(sizeof(AccountQuery) ==  3);
 
 } // namespace inbound
 
