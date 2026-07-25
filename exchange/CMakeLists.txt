@@ -10,6 +10,9 @@ FetchContent_Declare(
         GIT_REPOSITORY https://github.com/HdrHistogram/HdrHistogram_c.git
         GIT_TAG 0.11.9
 )
+# Keep the dependency's example/test programs out of our build and out of the
+# CTest set (otherwise they register as spurious "Not Run" entries).
+set(HDR_HISTOGRAM_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(hdr_histogram)
 
 add_library(common_lib INTERFACE
@@ -17,6 +20,7 @@ add_library(common_lib INTERFACE
 target_include_directories(common_lib INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/../infra
+        ${CMAKE_CURRENT_SOURCE_DIR}/../protocol  # protocol.hpp, ouch.hpp
 )
 
 add_library(config INTERFACE)
@@ -46,3 +50,15 @@ target_compile_options(exchange-debug PRIVATE
         -fsanitize=address,undefined -march=native)
 target_link_options(exchange-debug PRIVATE
         -fsanitize=address,undefined)
+
+#=============================================================================
+# Tests (GoogleTest)
+#=============================================================================
+if(BUILD_TESTING)
+    add_executable(server_tests
+            server/tests/validation_test.cpp)
+    target_include_directories(server_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/server/include) # validation.hpp
+    target_link_libraries(server_tests PRIVATE common_lib GTest::gtest_main)
+    add_test(NAME server_tests COMMAND server_tests)
+endif()
